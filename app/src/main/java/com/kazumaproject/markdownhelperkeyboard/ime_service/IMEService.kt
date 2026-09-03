@@ -179,6 +179,7 @@ import com.kazumaproject.markdownhelperkeyboard.BuildConfig
 import com.kazumaproject.markdownhelperkeyboard.R
 import com.kazumaproject.markdownhelperkeyboard.clipboard_history.database.ClipboardHistoryItem
 import com.kazumaproject.markdownhelperkeyboard.clipboard_history.database.ItemType
+import com.kazumaproject.markdownhelperkeyboard.syncbridge.ClipboardSyncNotifier
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.BunsetsuCandidateResult
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_ERA
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_CALCULATION
@@ -728,7 +729,10 @@ class IMEService : InputMethodService(), LifecycleOwner, InputConnection,
                     if (isClipboardHistoryFeatureEnabled) {
                         Timber.d("Saving new clipboard item to file and DB.")
                         // ここで Repository の新メソッドを呼ぶ (ファイル保存 + DB挿入)
-                        clipboardHistoryRepository.insertFromClipboard(newItem)
+                        val insertedId = clipboardHistoryRepository.insertFromClipboard(newItem)
+                        if (insertedId != null && insertedId > 0L) {
+                            ClipboardSyncNotifier.notifyClipboardChanged(this@IMEService)
+                        }
                         cleanupExpiredClipboardItemsIfNeededNow()
                     }
                 }

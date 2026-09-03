@@ -16,9 +16,22 @@
 .externalNativeBuild
 .cxx
 local.properties
+/.signing/
+/.android-sdk/
 app/release
 .gradle-user-home
 .idea/copilot.data.migration.ask2agent.xml
 app/fullStandard/
 app/liteFdroid/
 app/liteStandard
+
+# Android build artifacts and local secrets
+*.apk
+*.aab
+*.apks
+*.jks
+*.keystore
+*.hprof
+*.log
+google-services.json
+output.json

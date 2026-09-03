@@ -16,24 +16,48 @@ android {
         localProperties.load(new FileInputStream(localPropertiesFile))
     }
 
+    def envKeystoreFile = System.getenv('ANDROID_KEYSTORE_FILE')
+    def envKeystoreBase64 = System.getenv('ANDROID_KEYSTORE_BASE64')
+    def releaseKeystoreFile = envKeystoreFile ?: localProperties['KEYSTORE_FILE']
+    if (!envKeystoreFile && envKeystoreBase64) {
+        def generatedKeystoreFile = layout.buildDirectory.file("signing/release.keystore").get().asFile
+        generatedKeystoreFile.parentFile.mkdirs()
+        generatedKeystoreFile.bytes = java.util.Base64.decoder.decode(
+            envKeystoreBase64.replaceAll(/\s+/, '')
+        )
+        generatedKeystoreFile.setReadable(false, false)
+        generatedKeystoreFile.setReadable(true, true)
+        generatedKeystoreFile.setWritable(false, false)
+        generatedKeystoreFile.setWritable(true, true)
+        releaseKeystoreFile = generatedKeystoreFile
+    }
+    def releaseKeystorePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: localProperties['KEYSTORE_PASSWORD']
+    def releaseKeyAlias = System.getenv('ANDROID_KEY_ALIAS') ?: localProperties['KEY_ALIAS']
+    def releaseKeyPassword = System.getenv('ANDROID_KEY_PASSWORD') ?: localProperties['KEY_PASSWORD']
+
+    def sumireSyncPackageId = providers.gradleProperty("SUMIRE_SYNC_PACKAGE_ID")
+        .orElse("com.example.sumiresync")
+        .get()
+
     signingConfigs {
         release {
-            if (localProperties['KEYSTORE_FILE']) {
-                storeFile file(localProperties['KEYSTORE_FILE'])
-                storePassword localProperties['KEYSTORE_PASSWORD']
-                keyAlias localProperties['KEY_ALIAS']
-                keyPassword localProperties['KEY_PASSWORD']
+            if (releaseKeystoreFile) {
+                storeFile file(releaseKeystoreFile)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
             }
         }
     }
 
     defaultConfig {
-        applicationId "com.kazumaproject.markdownhelperkeyboard"
+        applicationId "com.example.sumire"
         minSdk 24
         targetSdk 36
         versionCode 804
         versionName "1.7.111"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField "String", "SUMIRE_SYNC_PACKAGE_ID", "\"${sumireSyncPackageId}\""
     }
 
     dependenciesInfo {

@@ -8,6 +8,12 @@
         android:name="android.permission.ACCESS_NETWORK_STATE"
         tools:node="remove" />
 
+    <permission
+        android:name="${applicationId}.permission.CLIPBOARD_SYNC"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="${applicationId}.permission.CLIPBOARD_SYNC" />
+
     <queries>
         <intent>
             <action android:name="android.view.InputMethod" />
@@ -97,6 +103,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <provider
+            android:name=".syncbridge.ClipboardSyncProvider"
+            android:authorities="${applicationId}.syncbridge.clipboard"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:readPermission="${applicationId}.permission.CLIPBOARD_SYNC"
+            android:writePermission="${applicationId}.permission.CLIPBOARD_SYNC" />
 
     </application>
 
