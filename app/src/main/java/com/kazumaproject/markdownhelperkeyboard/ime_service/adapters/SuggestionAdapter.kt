@@ -1217,6 +1217,7 @@ class SuggestionAdapter internal constructor(
         val badgeText: MaterialTextView =
             itemView.findViewById(R.id.suggestion_inline_toggle_badge)
         val badgeIcon: ImageView = itemView.findViewById(R.id.suggestion_inline_toggle_icon)
+        val defaultBadgeTextColors = badgeText.textColors
     }
 
     inner class InlineSuggestionViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -2385,10 +2386,12 @@ class SuggestionAdapter internal constructor(
             ContextCompat.getDrawable(holder.itemView.context, iconResId)?.mutate()
         })
         holder.itemView.contentDescription = item.toggle.contentDescription
-        candidateTextColor?.let { color ->
-            holder.badgeText.setTextColor(color)
-            holder.badgeIcon.imageTintList = android.content.res.ColorStateList.valueOf(color)
-        }
+        // Reused holders must also restore their default colors when leaving a skin.
+        val candidateTint = candidateTextColor?.let(android.content.res.ColorStateList::valueOf)
+        holder.badgeText.setTextColor(candidateTint ?: holder.defaultBadgeTextColors)
+        holder.badgeIcon.imageTintList = candidateTint ?: ContextCompat.getColorStateList(
+            holder.itemView.context, com.kazumaproject.core.R.color.keyboard_icon_color
+        )
         holder.itemView.isPressed = false
         holder.itemView.setOnClickListener {
             onInlineSuggestionToggleClickListener?.invoke()

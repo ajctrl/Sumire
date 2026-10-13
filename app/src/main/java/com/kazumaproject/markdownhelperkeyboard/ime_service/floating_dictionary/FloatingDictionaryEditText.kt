@@ -2,9 +2,10 @@ package com.kazumaproject.markdownhelperkeyboard.ime_service.floating_dictionary
 
 import android.content.Context
 import android.widget.EditText
+import androidx.appcompat.widget.AppCompatEditText
 
 /** Local editors do not receive the application's IME selection callbacks. */
-internal class FloatingDictionaryEditText(context: Context) : EditText(context) {
+internal class FloatingDictionaryEditText(context: Context) : AppCompatEditText(context) {
     var onSelectionChangedListener: ((EditText, Int, Int) -> Unit)? = null
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {

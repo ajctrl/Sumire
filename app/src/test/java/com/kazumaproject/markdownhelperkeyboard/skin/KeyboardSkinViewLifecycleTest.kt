@@ -99,11 +99,20 @@ class KeyboardSkinViewLifecycleTest {
             val modeSwitch = view.findViewById<InputModeSwitch>(modeSwitchId)
 
             apply(view, KeyboardSkinId.CUPERTINO_LIGHT)
-            assertEquals(
-                "${view.javaClass.simpleName} should draw separately colored labels",
-                null,
-                modeSwitch.drawable,
-            )
+            // Local-font support now renders the colored labels in a Drawable.
+            // Check its visible palette instead of the previous null-drawable detail.
+            val icon = requireNotNull(modeSwitch.drawable)
+            val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
+            icon.setBounds(0, 0, 96, 96)
+            icon.draw(Canvas(bitmap))
+            val colors = IntArray(96 * 96)
+            bitmap.getPixels(colors, 0, 96, 0, 0, 96, 96)
+            bitmap.recycle()
+            val selected = requireNotNull(KeyboardSkinRegistry.find(KeyboardSkinId.CUPERTINO_LIGHT)).palette.specialText
+            assertTrue("${view.javaClass.simpleName} should draw selected labels in the skin color",
+                colors.any { it == selected })
+            assertTrue("${view.javaClass.simpleName} should draw translucent idle labels",
+                colors.any { (it ushr 24) in 1..220 && (it and 0x00ffffff) == (selected and 0x00ffffff) })
 
             apply(view, KeyboardSkinId.DEFAULT)
             assertTrue("${view.javaClass.simpleName} should restore its mode icon", modeSwitch.drawable != null)

@@ -5,9 +5,11 @@ import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class ClipboardSyncContractTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 

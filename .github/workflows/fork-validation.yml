@@ -30,18 +30,23 @@ jobs:
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
       - name: Install SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
       - name: Test update automation and fork invariants
         run: |
           python3 -m unittest discover -s .github/scripts/tests -v
           python3 .github/scripts/check-fork-invariants.py
-      - name: Build, test and lint
-        run: >-
-          ./gradlew :app:assembleLiteStandardDebug
-          :app:testLiteStandardDebugUnitTest
-          :app:lintLiteStandardDebug
-          --stacktrace --no-daemon --max-workers=2
+      - name: Build Lite Debug
+        id: build
+        run: ./gradlew :app:assembleLiteStandardDebug --stacktrace --no-daemon --max-workers=2
+      - name: Run app unit tests
+        run: ./gradlew :app:testLiteStandardDebugUnitTest --stacktrace --no-daemon --max-workers=2
+      - name: Run Android Lint
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: ./gradlew :app:lintLiteStandardDebug --stacktrace --no-daemon --max-workers=2
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
