@@ -52,9 +52,12 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      sha: ${{ steps.merge.outputs.sha }}
     steps:
       # No checkout or execution of code from the update branch with this token.
       - name: Merge the validated revision
+        id: merge
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -76,4 +79,17 @@ jobs:
             "$RUNNER_TEMP/upstream-pr.json"
           gh api --method PUT "repos/$REPOSITORY/pulls/$PR/merge" \
             -f sha="$TESTED_HEAD" -f merge_method=merge \
-            --jq 'if .merged then .message else error(.message) end'
+            --jq 'if .merged then "sha=" + .sha else error(.message) end' >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: [prepare, merge]
+    # Also retry an unpublished release when upstream has no newer version.
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' &&
+          (needs.prepare.outputs.changed == 'false' || needs.merge.result == 'success') }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/android.yml
+    with:
+      ref: ${{ needs.merge.outputs.sha || needs.prepare.outputs.base }}
+    secrets: inherit

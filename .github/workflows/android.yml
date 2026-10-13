@@ -2,94 +2,147 @@ name: Android Release CI
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Merged dev commit to release (existing release tags are never moved)
+        type: string
+        default: dev
+        required: true
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
 
 jobs:
-  build:
+  plan:
+    if: github.repository == 'ajctrl/Sumire'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      needed: ${{ steps.plan.outputs.needed }}
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Plan immutable release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release-upstream.py plan
+
+  validate:
+    needs: plan
+    if: needs.plan.outputs.needed == 'true'
+    uses: ./.github/workflows/fork-validation.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+
+  build:
+    needs: [plan, validate]
+    if: needs.plan.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       ZENZ_MODEL_CACHE_DIR: ${{ github.workspace }}/.zenz-model-cache
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ needs.plan.outputs.sha }}
           submodules: recursive
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
+          persist-credentials: false
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurin'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
         with:
-          log-accepted-android-sdk-licenses: true
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
       - name: Cache Zenz model
         uses: actions/cache@v4
         with:
           path: .zenz-model-cache
           key: ${{ runner.os }}-zenz-model-v2-4f5423f0fad41a73b1242eb96fe5c12ae4fdca83-Q5_K_M-ggml-model-Q5_K_M.gguf
-
-      - name: Decode JKS from Base64
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > my-release-key.jks
-
-      - name: Add signing info to local.properties
-        run: |
-          if [ ! -f local.properties ]; then
-            touch local.properties
-          fi
-          KEYSTORE_PATH=$(pwd)/my-release-key.jks
-          
-          echo "# --- SigningConfig for CI ---" >> local.properties
-          echo "KEYSTORE_FILE=$KEYSTORE_PATH"     >> local.properties
-          echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> local.properties
-          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}"   >> local.properties
-          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> local.properties
-
-      - name: Build Release Variants
+      - name: Download previous release for signing comparison
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          gh release download --pattern app-fullStandard-arm64-v8a-release.apk
+          --dir "$RUNNER_TEMP/previous-release"
+      - name: Build signed release variants
+        env:
+          # Prefer the same secret names used by the previously published release.
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 || secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.ANDROID_KEY_PASSWORD }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        shell: bash
         run: |
-          ./gradlew clean \
-            :app:assembleFullStandardRelease \
-            -PsplitApks \
-            --stacktrace \
-            --no-daemon \
-            --max-workers=1
-          ./gradlew :app:assembleLiteStandardRelease \
-            -PsplitApks \
-            --stacktrace \
-            --no-daemon \
-            --max-workers=1
-          ./gradlew :app:assembleLiteFdroidRelease \
-            --stacktrace \
-            --no-daemon \
-            --max-workers=1
-
-      - name: Create Release and Upload APK
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          generate_release_notes: true
-          files: app/build/outputs/apk/**/*.apk
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            test -n "${!name}" || { echo "Missing signing secret: $name" >&2; exit 1; }
+          done
+          # Do not serialize signing secrets into Gradle's configuration cache.
+          ./gradlew :app:assembleFullStandardRelease -PsplitApks --no-configuration-cache --stacktrace --no-daemon --max-workers=1
+          ./gradlew :app:assembleLiteStandardRelease -PsplitApks --no-configuration-cache --stacktrace --no-daemon --max-workers=1
+          ./gradlew :app:assembleLiteFdroidRelease --no-configuration-cache --stacktrace --no-daemon --max-workers=1
+      - name: Verify signing, package IDs, versions and complete APK set
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_APK: ${{ runner.temp }}/previous-release/app-fullStandard-arm64-v8a-release.apk
+          RELEASE_DIRECTORY: ${{ runner.temp }}/release-apks
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+        run: python3 .github/scripts/verify-release-apks.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-apks/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -f app/build/signing/release.keystore
+
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-apks
+      - name: Create immutable tag, upload draft and publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DIRECTORY: ${{ runner.temp }}/release-apks
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+        run: python3 .github/scripts/release-upstream.py publish

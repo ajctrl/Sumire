@@ -1,7 +1,8 @@
 # フォーク元への自動追随
 
 `KazumaProject/JapaneseKeyboard` の正式リリースを毎日 03:23 UTC に確認し、
-更新PRを作成します。ビルド・テストに成功した更新だけを `dev` に自動マージします。
+更新PRを作成します。ビルド・テストに成功した更新だけを `dev` に自動マージし、
+署名付きAPKをGitHub Releasesに自動公開します。
 Actions の **Sync upstream release → Run workflow** でも実行できます。
 スケジュールは既定ブランチ `dev` で有効になり、実行時刻はGitHubの混雑で遅れる場合があります。
 
@@ -12,7 +13,8 @@ Actions の **Sync upstream release → Run workflow** でも実行できます�
 - 通常のGitマージで、`com.example.sumire` のアプリID、署名設定、Sumire Sync連携を保持します。
 - PRブランチは `upstream/<タグ>-<devのSHA先頭12文字>`。同じ更新の再実行でforce pushは行いません。
 - **Merge commit** で上流の履歴を保持します。更新PRを手動マージする場合もSquash/Rebaseは使わないでください。
-- `dev` への統合までが対象です。APKの署名配布・リリースタグ作成は別途実施します。
+- 検証済みの `dev` コミットから、上流と同名のタグ（例: `v1.7.128`）とGitHub Releaseを作成します。
+- 更新がない日も未公開リリースを確認し、公開に失敗していれば再試行します。
 
 ## 自動マージの条件
 
@@ -26,8 +28,30 @@ Actions の **Sync upstream release → Run workflow** でも実行できます�
 5. `:app:lintLiteStandardDebug`
 
 Full版のモデル取得・ネイティブビルド、実機/エミュレータでの入力・IPC動作はこの条件には含まれません。
-ビルド用ジョブには書き込みトークンや署名Secretを渡しません。
+検証用ジョブには書き込みトークンや署名Secretを渡しません。
 マージ直前にPRのSHAと `dev` のSHAを再確認します。ブランチ保護や必須レビューを迂回しません。
+
+## APKの自動公開
+
+`Sync upstream release` が `Android Release CI` を再利用ワークフローとして直接呼び出します。
+`GITHUB_TOKEN` によるタグ作成だけでは別ワークフローが起動しないため、タグpushイベントには依存しません。
+手動の場合は **Android Release CI → Run workflow → ref: dev** で実行できます。
+公開対象は `dev` に取り込み済みのコミットに限定し、公開直前にも同一SHAでLiteビルド・全単体テスト・Lintを実行します。
+
+- Full Standard: arm64-v8a / x86_64
+- Lite Standard: arm64-v8a / x86_64
+- Lite F-Droid: universal
+- `SHA256SUMS`: 上記5つのAPKのハッシュ
+
+5つのAPKをすべてビルドし、署名検証、以前の公開済みFull arm64 APKとの証明書一致、
+アプリID、バージョン名・コードを確認します。versionCodeが以前より増えていなければ停止します。
+署名ビルドのみに既存Secretを渡し、Gradle configuration cacheには保存しません。
+署名付きビルドと公開は別ジョブとし、書き込みトークンは公開ジョブだけに渡します。
+
+ビルド成功後にタグを作成し、ドラフトに6ファイルをアップロード、GitHub上のハッシュを照合してから公開します。
+公開済みの同じバージョンはスキップし、タグの移動や公開済みAPKの置き換えは行いません。
+中断したドラフトは同じタグのコミットから再ビルドして復旧します。
+初回の署名比較用に、既存の正常な公開リリースが必要です。
 
 ## GitHub側の設定
 
@@ -38,6 +62,9 @@ Full版のモデル取得・ネイティブビルド、実機/エミュレータ
 - Settings → General の **Allow merge commits** が必要です。
 - GitHubの「Allow auto-merge」設定やPATは不要です。検証後のジョブがマージAPIを呼びます。
 - 必須レビュー等を設定した場合、その条件が満たされるまでマージAPIは失敗します。
+- 署名Secret: `KEYSTORE_BASE64` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD`。
+  未設定の場合は対応する `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*` にフォールバックします。
+  既存リリースと同じ署名を使ってください。必要なモデルに認証が必要な場合は `HF_TOKEN` も設定します。
 
 ## 停止した場合
 
@@ -47,6 +74,9 @@ Actionsの失敗ログとアップロードされた `fork-validation-*` のレ�
 Actionsの通知設定で失敗通知を受け取れるようにしてください。
 
 - 一時的なビルド失敗: 同じワークフローを再実行します。
+- マージ後の公開失敗: 次回の自動追随で再試行されます。すぐ復旧する場合は
+  `Android Release CI` を手動実行します。署名・バージョン不一致なら原因を修正してから再実行してください。
+- 公開済みリリースの欠損: 自動上書きをせず停止します。既存のタグとAPKを確認し、手動で復旧してください。
 - 検証中に `dev` が進んだ: 新しいワークフローを開始します。旧PRは手動で閉じてください。
 - 競合やコード修正が必要: 通常の作業ブランチで上流タグをマージ・修正し、
   `.github/upstream.json` を更新してPRを作成します。手動更新PRにも Fork validation が実行されます。

@@ -61,7 +61,7 @@ def main():
         raise RuntimeError("dev changed after checkout; rerun the workflow")
     tag = release_tag(api(f"repos/{UPSTREAM}/releases/latest"), state["tag"])
     if tag is None:
-        output(changed="false")
+        output(changed="false", base=base)
         print(f"Already at {state['tag']} or newer")
         return
     git("fetch", "--no-tags", f"https://github.com/{UPSTREAM}.git",
@@ -81,7 +81,10 @@ def main():
         raise RuntimeError(f"Manual upstream merge required:\n{conflicts}\n{merged.stderr}")
     # Never automatically change the code that grants approval to an update.
     protected = [".github/workflows/sync-upstream.yml",
+                 ".github/workflows/android.yml",
                  ".github/workflows/fork-validation.yml",
+                 ".github/scripts/release-upstream.py",
+                 ".github/scripts/verify-release-apks.py",
                  ".github/scripts/sync-upstream.py",
                  ".github/scripts/check-fork-invariants.py",
                  ".github/scripts/tests", str(STATE)]
