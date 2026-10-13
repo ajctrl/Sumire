@@ -51,7 +51,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fork-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: fork-validation-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.ref || github.sha }}
           path: |
             app/build/reports/
             app/build/test-results/
