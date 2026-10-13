@@ -10,7 +10,12 @@ import android.graphics.RectF
 import android.util.TypedValue
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.graphics.toColorInt
+import com.kazumaproject.core.domain.skin.KeyboardSkinId
+import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
 import com.kazumaproject.core.data.popup.PopupViewStyle
+import com.kazumaproject.core.ui.font.KeyboardFontAware
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
 import com.kazumaproject.custom_keyboard.data.FlickDirection
 import com.kazumaproject.custom_keyboard.data.FlickPopupColorTheme
 import kotlin.math.min
@@ -18,7 +23,7 @@ import kotlin.math.min
 /**
  * 通常フリック時に表示される、方向を示す矢印型のポップアップ
  */
-class DirectionalKeyPopupView(context: Context) : AppCompatTextView(context) {
+class DirectionalKeyPopupView(context: Context) : AppCompatTextView(context), KeyboardFontAware {
 
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         // 初期色は設定するが、onDrawで動的に上書きされる
@@ -46,11 +51,17 @@ class DirectionalKeyPopupView(context: Context) : AppCompatTextView(context) {
     private var popupTextColor: Int? = null
 
     init {
+        setKeyboardFont(KeyboardFontApplicator.processSnapshot)
         // init時のテキスト色はテーマで上書きされる前提
         setTextColor(Color.WHITE)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
         // ▼▼▼ 追加: 枠線の太さを設定 ▼▼▼
         strokePaint.strokeWidth = dpToPx(1f)
+    }
+
+    override fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        KeyboardFontApplicator.track(this)
+        KeyboardFontApplicator.apply(this, snapshot)
     }
 
     /**
@@ -69,7 +80,10 @@ class DirectionalKeyPopupView(context: Context) : AppCompatTextView(context) {
         invalidate()
     }
 
+    private var skinId = KeyboardSkinId.DEFAULT
+
     fun applyPopupViewStyle(style: PopupViewStyle) {
+        skinId = style.skinId
         popupBackgroundColor = style.backgroundColor
         popupTextColor = style.textColor
         setTextSize(TypedValue.COMPLEX_UNIT_SP, style.textSizeSp.coerceIn(8f, 48f))
@@ -81,6 +95,27 @@ class DirectionalKeyPopupView(context: Context) : AppCompatTextView(context) {
      * ▼▼▼ 変更点: 背景の描画後に、枠線も描画する処理を追加 ▼▼▼
      */
     override fun onDraw(canvas: Canvas) {
+        KeyboardSkinRegistry.find(skinId)?.let { skin ->
+            val direction = currentDirection.skinDirection()
+            skin.popupDrawable(resources, direction).apply {
+                setBounds(0, 0, width, height)
+                draw(canvas)
+            }
+            val cx = width * when (direction) {
+                com.kazumaproject.core.ui.skin.PopupDirection.LEFT -> 1f / 3
+                com.kazumaproject.core.ui.skin.PopupDirection.RIGHT -> 2f / 3
+                else -> .5f
+            }
+            val cy = height * when (direction) {
+                com.kazumaproject.core.ui.skin.PopupDirection.TOP -> 1f / 3
+                com.kazumaproject.core.ui.skin.PopupDirection.BOTTOM -> 2f / 3
+                else -> .5f
+            }
+            paint.color = skin.palette.text
+            paint.textAlign = Paint.Align.CENTER
+            canvas.drawText(text.toString(), cx, cy - (paint.ascent() + paint.descent()) / 2, paint)
+            return
+        }
         val w = width.toFloat()
         val h = height.toFloat()
         if (w == 0f || h == 0f) return

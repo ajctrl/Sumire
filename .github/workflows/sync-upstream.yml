@@ -1,0 +1,79 @@
+name: Sync upstream release
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'ajctrl/Sumire' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      head: ${{ steps.sync.outputs.head }}
+      base: ${{ steps.sync.outputs.base }}
+      pr: ${{ steps.sync.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Prepare update PR
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/sync-upstream.py
+
+  validate:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fork-validation.yml
+    with:
+      ref: ${{ needs.prepare.outputs.head }}
+
+  merge:
+    needs: [prepare, validate]
+    if: needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # No checkout or execution of code from the update branch with this token.
+      - name: Merge the validated revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR: ${{ needs.prepare.outputs.pr }}
+          TESTED_HEAD: ${{ needs.prepare.outputs.head }}
+          TESTED_BASE: ${{ needs.prepare.outputs.base }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_base=$(gh api "repos/$REPOSITORY/git/ref/heads/dev" --jq .object.sha)
+          test "$current_base" = "$TESTED_BASE" || {
+            echo 'dev changed during validation; rerun the sync workflow.' >&2
+            exit 1
+          }
+          gh api "repos/$REPOSITORY/pulls/$PR" > "$RUNNER_TEMP/upstream-pr.json"
+          jq -e --arg head "$TESTED_HEAD" --arg repo "$REPOSITORY" \
+            '.state == "open" and .draft == false and .base.ref == "dev" and
+             .head.repo.full_name == $repo and .head.sha == $head' \
+            "$RUNNER_TEMP/upstream-pr.json"
+          gh api --method PUT "repos/$REPOSITORY/pulls/$PR/merge" \
+            -f sha="$TESTED_HEAD" -f merge_method=merge \
+            --jq 'if .merged then .message else error(.message) end'

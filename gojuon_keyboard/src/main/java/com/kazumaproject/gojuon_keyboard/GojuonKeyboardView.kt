@@ -1,6 +1,9 @@
 package com.kazumaproject.gojuon_keyboard
 
+import com.kazumaproject.core.domain.extensions.touchScreenCoordinates
 import android.annotation.SuppressLint
+import com.kazumaproject.core.domain.extensions.screenWidth
+import com.kazumaproject.core.domain.extensions.screenHeight
 import android.content.Context
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -13,6 +16,8 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.GestureDetector
 import android.view.LayoutInflater
+import com.kazumaproject.core.domain.flick.IndependentKeyTouchDispatcher
+import com.kazumaproject.core.domain.flick.IndependentKeyTouchSession
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -26,6 +31,13 @@ import androidx.core.view.isVisible
 import androidx.core.widget.ImageViewCompat
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.textview.MaterialTextView
+import com.kazumaproject.core.domain.skin.KeyboardSkinId
+import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
+import com.kazumaproject.core.ui.skin.spaceConvertKeyStyle
+import com.kazumaproject.core.ui.font.KeyboardFontAware
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontGlyphDrawable
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
 import com.kazumaproject.core.data.gojuon.GojuonCapsLockState
 import com.kazumaproject.core.domain.extensions.hide
 import com.kazumaproject.core.domain.extensions.layoutXPosition
@@ -100,13 +112,53 @@ import java.util.concurrent.atomic.AtomicReference
 @SuppressLint("ClickableViewAccessibility")
 class GojuonKeyboardView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
-) : ConstraintLayout(context, attrs, defStyleAttr), View.OnTouchListener {
+) : ConstraintLayout(context, attrs, defStyleAttr), View.OnTouchListener, KeyboardFontAware {
 
     private val binding: GojuonLayoutBinding =
         GojuonLayoutBinding.inflate(LayoutInflater.from(context), this)
 
     val currentInputMode = AtomicReference<InputMode>(InputMode.ModeJapanese)
+    private var displayedInputMode: InputMode = InputMode.ModeJapanese
     private lateinit var pressedKey: PressedKey
+    private var independentMultiTouchEnabled = false
+    private var independentMultiTouchForCurrentGesture = false
+    private val pointerPopups = mutableMapOf<Int, PointerPopups>()
+    private var popupPointerId: Int? = null
+    private var longPressPresentationShown = false
+    private val independentTouches: IndependentKeyTouchDispatcher by lazy {
+        IndependentKeyTouchDispatcher(
+            view = this,
+            scope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+            hitTest = ::pressedKeyByMotionEvent,
+            threshold = { flickThresholdPx },
+            thresholdShape = { flickThresholdShape },
+            longPressTimeout = { longPressTimeout },
+            isExclusiveKey = ::isIndependentExclusiveKey,
+            isExclusiveMode = { false },
+            dispatch = { session, event ->
+                withIndependentSession(session) {
+                    onTouchLegacy(this, event)
+                    if (event.actionMasked == MotionEvent.ACTION_UP) releasePointerPopups(session.pointerId)
+                }
+            },
+            onLongPress = { session ->
+                withIndependentSession(session) {
+                    longPressListener?.onLongPress(pressedKey.key)
+                    if (independentTouches.contains(session)) onLongPressed()
+                }
+            },
+            onCancel = { session, reason ->
+                withIndependentSession(session) {
+                    resetLongPressAction()
+                    releasePointerPopups(session.pointerId)
+                }
+                (getButtonFromKey(session.key) as? View)?.isPressed = false
+                keyTouchCancelListener?.onKeyTouchCanceled(session.key, reason)
+            },
+            restore = ::restoreIndependentTouches
+        )
+    }
+
     private var inputModeChangedListener: ((InputMode) -> Unit)? = null
 
     private var flickSensitivity: Int = 100
@@ -300,6 +352,27 @@ class GojuonKeyboardView @JvmOverloads constructor(
     private lateinit var popupWindowCenter: PopupWindow
     private lateinit var bubbleViewCenter: KeyWindowLayout
     private lateinit var popTextCenter: MaterialTextView
+    private var keyboardFontSnapshot = KeyboardFontSnapshot()
+
+    override fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        KeyboardFontApplicator.track(this)
+        keyboardFontSnapshot = snapshot
+        KeyboardFontApplicator.applyToTextViews(this, snapshot) { true }
+        KeyboardFontGlyphDrawable.setImageResource(
+            binding.keyKigou,
+            com.kazumaproject.core.R.drawable.symbol,
+            snapshot,
+        )
+        binding.keySwitchKeyMode.setKeyboardFont(snapshot)
+        skinGuidePopup?.setKeyboardFont(snapshot)
+        applyPopupKeyboardFont()
+    }
+
+    private fun applyPopupKeyboardFont() {
+        if (!::popTextActive.isInitialized) return
+        listOf(popTextActive, popTextLeft, popTextTop, popTextRight, popTextBottom, popTextCenter)
+            .forEach { KeyboardFontApplicator.apply(it, keyboardFontSnapshot) }
+    }
 
     private val _gojuonCapsLockState = MutableStateFlow(GojuonCapsLockState())
     private val gojuonCapsLockState: StateFlow<GojuonCapsLockState> =
@@ -323,6 +396,10 @@ class GojuonKeyboardView @JvmOverloads constructor(
     private var customBorderEnable: Boolean = false
     private var customBorderColor: Int = Color.BLACK
     private var borderWidth: Int = 1
+
+    private val skinLongPress = com.kazumaproject.core.ui.skin.SkinLongPressPresentation()
+    private var skinGuidePopup: com.kazumaproject.core.ui.skin.SkinGuidePopup? = null
+    private var keyboardSkinId = KeyboardSkinId.DEFAULT
 
     init {
         (allButtonKeys + allImageButtonKeys).forEach { it.setOnTouchListener(this) }
@@ -390,6 +467,10 @@ class GojuonKeyboardView @JvmOverloads constructor(
      * メンバ変数に値を保存してからテーマを適用します。
      * @param currentNightMode res.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK の値
      */
+    private val skinColorRestorer by lazy {
+        com.kazumaproject.core.ui.skin.KeyboardSkinColorRestorer(binding.root)
+    }
+
     fun applyKeyboardTheme(
         themeMode: String,
         currentNightMode: Int,
@@ -403,9 +484,14 @@ class GojuonKeyboardView @JvmOverloads constructor(
         customBorderEnable: Boolean,
         customBorderColor: Int,
         liquidGlassKeyAlphaEnable: Int,
-        borderWidth: Int
+        borderWidth: Int,
+        skinId: KeyboardSkinId = KeyboardSkinId.DEFAULT
     ) {
         // メンバ変数に代入
+        if (this.keyboardSkinId != skinId) { hideAllPopWindow() }
+        if (pointerPopups.isNotEmpty()) cancelActiveTouch(KeyTouchCancelReason.PointerInterrupted)
+        skinColorRestorer.beforeSkinChange(this.keyboardSkinId, skinId)
+        this.keyboardSkinId = skinId
         this.themeMode = themeMode
 
         // Int型の currentNightMode から Boolean型の isNightMode を判定
@@ -452,6 +538,12 @@ class GojuonKeyboardView @JvmOverloads constructor(
                 resetLayout()
             }
         }
+        binding.keySwitchKeyMode.setInputMode(currentInputMode.get(), isGojuon = true)
+        val modeLabelColor = KeyboardSkinRegistry.find(keyboardSkinId)?.palette?.specialText
+        binding.keySwitchKeyMode.setSkinModeLabelColors(
+            selectedColor = modeLabelColor,
+            idleColor = modeLabelColor?.let { ColorUtils.setAlphaComponent(it, 150) },
+        )
     }
 
     /**
@@ -510,7 +602,8 @@ class GojuonKeyboardView @JvmOverloads constructor(
 
             // 3. 特殊キーへの適用
             val specialDrawableState =
-                getDynamicNeumorphDrawable(specialKeyColor, radius).constantState
+                getDynamicNeumorphDrawable(specialKeyColor, radius,
+                    com.kazumaproject.core.ui.skin.SkinKeyRole.MODIFIER).constantState
             val specialColorStateList = ColorStateList.valueOf(specialKeyTextColor)
 
             specialKeys.forEach { view ->
@@ -522,6 +615,13 @@ class GojuonKeyboardView @JvmOverloads constructor(
                 }
                 ImageViewCompat.setImageTintList(view, specialColorStateList)
             }
+            KeyboardSkinRegistry.find(keyboardSkinId)?.let { skin ->
+                val spaceConvertStyle = skin.spaceConvertKeyStyle()
+                keySpace.background = skin.keyDrawable(resources,
+                    role = spaceConvertStyle.role)
+                ImageViewCompat.setImageTintList(keySpace,
+                    ColorStateList.valueOf(spaceConvertStyle.textColor))
+            }
 
         }
     }
@@ -529,7 +629,10 @@ class GojuonKeyboardView @JvmOverloads constructor(
     /**
      * 指定された色(baseColor)を元に、ニューモーフィズムのDrawableを動的に生成する
      */
-    private fun getDynamicNeumorphDrawable(baseColor: Int, radius: Float): Drawable {
+    private fun getDynamicNeumorphDrawable(baseColor: Int, radius: Float,
+            role: com.kazumaproject.core.ui.skin.SkinKeyRole =
+                com.kazumaproject.core.ui.skin.SkinKeyRole.CHARACTER): Drawable {
+        KeyboardSkinRegistry.find(keyboardSkinId)?.let { return it.keyDrawable(resources, role = role) }
         val highlightColor = manipulateColor(baseColor, 1.2f)
         val shadowColor = manipulateColor(baseColor, 0.8f)
 
@@ -767,17 +870,24 @@ class GojuonKeyboardView @JvmOverloads constructor(
         popupWindowCenter = mPopWindowCenter
 
         bubbleViewActive = mPopWindowActive.contentView.findViewById(R.id.bubble_layout_active)
+        bubbleViewActive.skinId = keyboardSkinId
         popTextActive = mPopWindowActive.contentView.findViewById(R.id.popup_text_active)
         bubbleViewLeft = mPopWindowLeft.contentView.findViewById(R.id.bubble_layout)
+        bubbleViewLeft.skinId = keyboardSkinId
         popTextLeft = mPopWindowLeft.contentView.findViewById(R.id.popup_text)
         bubbleViewTop = mPopWindowTop.contentView.findViewById(R.id.bubble_layout)
+        bubbleViewTop.skinId = keyboardSkinId
         popTextTop = mPopWindowTop.contentView.findViewById(R.id.popup_text)
         bubbleViewRight = mPopWindowRight.contentView.findViewById(R.id.bubble_layout)
+        bubbleViewRight.skinId = keyboardSkinId
         popTextRight = mPopWindowRight.contentView.findViewById(R.id.popup_text)
         bubbleViewBottom = mPopWindowBottom.contentView.findViewById(R.id.bubble_layout)
+        bubbleViewBottom.skinId = keyboardSkinId
         popTextBottom = mPopWindowBottom.contentView.findViewById(R.id.popup_text)
         bubbleViewCenter = mPopWindowCenter.contentView.findViewById(R.id.bubble_layout)
+        bubbleViewCenter.skinId = keyboardSkinId
         popTextCenter = mPopWindowCenter.contentView.findViewById(R.id.popup_text)
+        applyPopupKeyboardFont()
     }
 
     @SuppressLint("InflateParams")
@@ -808,7 +918,40 @@ class GojuonKeyboardView @JvmOverloads constructor(
         keyTouchCancelListener = listener
     }
 
-    override fun onTouch(v: View?, event: MotionEvent?): Boolean {
+    override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            independentMultiTouchForCurrentGesture = independentMultiTouchEnabled
+        }
+        // Legacy mode keeps Android's existing child-key dispatch. Independent mode needs the
+        // complete pointer stream, rather than separate ACTION_DOWN events split across children.
+        return independentMultiTouchForCurrentGesture || super.onInterceptTouchEvent(event)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean =
+        if (independentMultiTouchForCurrentGesture) onTouch(this, event)
+        else super.onTouchEvent(event)
+
+    fun setIndependentMultiTouchEnabled(enabled: Boolean) {
+        independentMultiTouchEnabled = enabled
+    }
+
+    override fun onTouch(view: View?, event: MotionEvent?): Boolean {
+        if (view == null || event == null || visibility != View.VISIBLE) return false
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            independentMultiTouchForCurrentGesture = independentMultiTouchEnabled
+        }
+        if (independentMultiTouchForCurrentGesture && event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            cancelActiveTouch(KeyTouchCancelReason.ActionCancel)
+            return true
+        }
+        return if (independentMultiTouchForCurrentGesture) {
+            independentTouches.onTouch(event)
+        } else {
+            onTouchLegacy(view, event)
+        }
+    }
+
+    private fun onTouchLegacy(v: View?, event: MotionEvent?): Boolean {
         if (v != null && event != null) {
             if (this.visibility != View.VISIBLE) {
                 return false
@@ -1066,7 +1209,7 @@ class GojuonKeyboardView @JvmOverloads constructor(
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     if (isLongPressed) {
                         hideAllPopWindow()
-                        Blur.removeBlurEffect(this)
+                        if (!hasOtherLongPress()) Blur.removeBlurEffect(this)
                     }
                     popupWindowActive.hide()
                     longPressJob?.cancel()
@@ -1281,7 +1424,166 @@ class GojuonKeyboardView @JvmOverloads constructor(
         longPressJob = null
     }
 
+    /** Display state has the same lifetime and owner as its pointer's recognizer. */
+    private class PointerPopups(
+        val popupWindowActive: PopupWindow,
+        val bubbleViewActive: KeyWindowLayout,
+        val popTextActive: MaterialTextView,
+        val popupWindowLeft: PopupWindow,
+        val bubbleViewLeft: KeyWindowLayout,
+        val popTextLeft: MaterialTextView,
+        val popupWindowTop: PopupWindow,
+        val bubbleViewTop: KeyWindowLayout,
+        val popTextTop: MaterialTextView,
+        val popupWindowRight: PopupWindow,
+        val bubbleViewRight: KeyWindowLayout,
+        val popTextRight: MaterialTextView,
+        val popupWindowBottom: PopupWindow,
+        val bubbleViewBottom: KeyWindowLayout,
+        val popTextBottom: MaterialTextView,
+        val popupWindowCenter: PopupWindow,
+        val bubbleViewCenter: KeyWindowLayout,
+        val popTextCenter: MaterialTextView,
+        var guide: com.kazumaproject.core.ui.skin.SkinGuidePopup? = null,
+    )
+
+
+    private fun capturePopups() = PointerPopups(
+        popupWindowActive,
+        bubbleViewActive,
+        popTextActive,
+        popupWindowLeft,
+        bubbleViewLeft,
+        popTextLeft,
+        popupWindowTop,
+        bubbleViewTop,
+        popTextTop,
+        popupWindowRight,
+        bubbleViewRight,
+        popTextRight,
+        popupWindowBottom,
+        bubbleViewBottom,
+        popTextBottom,
+        popupWindowCenter,
+        bubbleViewCenter,
+        popTextCenter,
+        skinGuidePopup,
+    )
+
+    private fun usePopups(popups: PointerPopups) {
+        popupWindowActive = popups.popupWindowActive
+        bubbleViewActive = popups.bubbleViewActive
+        popTextActive = popups.popTextActive
+        popupWindowLeft = popups.popupWindowLeft
+        bubbleViewLeft = popups.bubbleViewLeft
+        popTextLeft = popups.popTextLeft
+        popupWindowTop = popups.popupWindowTop
+        bubbleViewTop = popups.bubbleViewTop
+        popTextTop = popups.popTextTop
+        popupWindowRight = popups.popupWindowRight
+        bubbleViewRight = popups.bubbleViewRight
+        popTextRight = popups.popTextRight
+        popupWindowBottom = popups.popupWindowBottom
+        bubbleViewBottom = popups.bubbleViewBottom
+        popTextBottom = popups.popTextBottom
+        popupWindowCenter = popups.popupWindowCenter
+        bubbleViewCenter = popups.bubbleViewCenter
+        popTextCenter = popups.popTextCenter
+        skinGuidePopup = popups.guide
+    }
+
+    private fun createPointerPopups(): PointerPopups {
+        val previous = capturePopups()
+        try {
+            skinGuidePopup = null
+            declarePopupWindows()
+            if (themeMode == "custom") setCustomThemePopup()
+            return capturePopups()
+        } finally {
+            usePopups(previous)
+        }
+    }
+
+    private fun releasePointerPopups(pointerId: Int) {
+        pointerPopups.remove(pointerId)?.let { popups ->
+            popups.guide?.dismiss()
+            popups.popupWindowActive.hide()
+            popups.popupWindowLeft.hide()
+            popups.popupWindowTop.hide()
+            popups.popupWindowRight.hide()
+            popups.popupWindowBottom.hide()
+            popups.popupWindowCenter.hide()
+        }
+    }
+
+    private fun hasOtherLongPress(): Boolean = independentMultiTouchForCurrentGesture &&
+        independentTouches.activeSessions.any { it.pointerId != popupPointerId && it.isLongPressed }
+
+    private fun showLongPressPresentation(guide: View?) {
+        if (!independentMultiTouchForCurrentGesture || !longPressPresentationShown) {
+            skinLongPress.show(this, keyboardSkinId, guide)
+            longPressPresentationShown = true
+        }
+    }
+
+    private fun clearLongPressPresentation(animated: Boolean = false) {
+        if (hasOtherLongPress()) return
+        skinLongPress.clear(animated)
+        longPressPresentationShown = false
+    }
+
+    private inline fun withIndependentSession(session: IndependentKeyTouchSession, action: () -> Unit) {
+        val previousPopups = capturePopups()
+        val previousPopupPointerId = popupPointerId
+        val popups = pointerPopups.getOrPut(session.pointerId) { createPointerPopups() }
+        popupPointerId = session.pointerId
+        usePopups(popups)
+        val previousThreshold = flickThresholdPx
+        val previousShape = flickThresholdShape
+        val previousTimeout = longPressTimeout
+        pressedKey = session.pressedKey
+        longPressJob = session.longPressJob
+        isLongPressed = session.isLongPressed
+        flickThresholdPx = session.thresholdPx
+        flickThresholdShape = session.thresholdShape
+        longPressTimeout = session.longPressTimeoutMillis
+        try {
+            action()
+        } finally {
+            session.pressedKey = pressedKey
+            session.longPressJob = longPressJob
+            session.isLongPressed = isLongPressed
+            flickThresholdPx = previousThreshold
+            flickThresholdShape = previousShape
+            longPressTimeout = previousTimeout
+            popups.guide = skinGuidePopup
+            usePopups(previousPopups)
+            popupPointerId = previousPopupPointerId
+            if (independentMultiTouchForCurrentGesture) {
+                restoreIndependentTouches(independentTouches.activeSessions, null)
+            }
+        }
+    }
+
+    private fun isIndependentExclusiveKey(key: Key): Boolean =
+        key == Key.SideKeySymbol || key == Key.SideKeyInputMode || key == Key.SideKeyNumberMode ||
+            (currentInputMode.get() != InputMode.ModeJapanese && key in setOf(Key.KeyKuten, Key.KeyO, Key.KeyKO))
+
+    private fun restoreIndependentTouches(
+        sessions: List<IndependentKeyTouchSession>,
+        focused: IndependentKeyTouchSession?
+    ) {
+        resetAllKeys()
+        sessions.forEach { session -> (getButtonFromKey(session.key) as? View)?.isPressed = true }
+    }
+
     private fun cancelActiveTouch(reason: KeyTouchCancelReason) {
+        if (independentMultiTouchForCurrentGesture) {
+            independentTouches.cancelAll(reason)
+            if (::pressedKey.isInitialized) pressedKey = pressedKey.copy(key = Key.NotSelected)
+        }
+
+        pointerPopups.keys.toList().forEach(::releasePointerPopups)
         resetLongPressAction()
         resetAllKeys()
 
@@ -3062,6 +3364,13 @@ class GojuonKeyboardView @JvmOverloads constructor(
             InputMode.ModeEnglish -> buildKeyRectsEnglish()
             InputMode.ModeJapanese -> buildKeyRects()
             InputMode.ModeNumber -> buildKeyRectsNumber()
+        }.let { rects ->
+            val sx = screenWidth().toFloat() / width.coerceAtLeast(1)
+            val sy = screenHeight().toFloat() / height.coerceAtLeast(1)
+            if (sx == 1f && sy == 1f) rects else rects.map { rect ->
+                rect.copy(right = rect.left + ((rect.right - rect.left) * sx).toInt(),
+                    bottom = rect.top + ((rect.bottom - rect.top) * sy).toInt())
+            }
         }
 
         keyRects.forEach { rect ->
@@ -3081,20 +3390,13 @@ class GojuonKeyboardView @JvmOverloads constructor(
     }
 
     // --- Utility to get consistent absolute coordinates ---
-    private fun getRawCoordinates(event: MotionEvent, pointer: Int): Pair<Float, Float> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            event.getRawX(pointer) to event.getRawY(pointer)
-        } else {
-            val location = IntArray(2)
-            this.getLocationOnScreen(location)
-            (event.getX(pointer) + location[0]) to (event.getY(pointer) + location[1])
-        }
-    }
+    private fun getRawCoordinates(event: MotionEvent, pointer: Int): Pair<Float, Float> =
+        touchScreenCoordinates(event, pointer)
 
     private fun resetLongPressAction() {
         if (isLongPressed) {
             hideAllPopWindow()
-            Blur.removeBlurEffect(this)
+            if (!hasOtherLongPress()) Blur.removeBlurEffect(this)
         }
         longPressJob?.cancel()
         isLongPressed = false
@@ -3127,6 +3429,7 @@ class GojuonKeyboardView @JvmOverloads constructor(
                         return
                     }
                 }
+                if (showClassicSkinGuide(it)) return
                 if (popTextTop.text.isNotEmpty()) {
                     popupWindowTop.setPopUpWindowFlickTop(context, bubbleViewTop, it)
                 }
@@ -3146,12 +3449,33 @@ class GojuonKeyboardView @JvmOverloads constructor(
                 popupWindowActive.setPopUpWindowFlickTap(
                     context, bubbleViewActive, it
                 )
-                Blur.applyBlurEffect(this, 8f)
+                if (keyboardSkinId == KeyboardSkinId.DEFAULT) Blur.applyBlurEffect(this, 8f)
             }
         }
     }
 
+    private fun showClassicSkinGuide(anchor: View): Boolean {
+        if (keyboardSkinId != KeyboardSkinId.CUPERTINO_CLASSIC) return false
+        val skin = com.kazumaproject.core.ui.skin.KeyboardSkinRegistry.find(keyboardSkinId) ?: return false
+        hideAllPopWindow()
+        val presenter = skinGuidePopup ?: com.kazumaproject.core.ui.skin.SkinGuidePopup(context).also {
+            skinGuidePopup = it
+            it.setKeyboardFont(keyboardFontSnapshot)
+        }
+        val guide = presenter.show(anchor, skin, mapOf(
+            com.kazumaproject.core.ui.skin.PopupDirection.CENTER to popTextActive.text,
+            com.kazumaproject.core.ui.skin.PopupDirection.LEFT to popTextLeft.text,
+            com.kazumaproject.core.ui.skin.PopupDirection.TOP to popTextTop.text,
+            com.kazumaproject.core.ui.skin.PopupDirection.RIGHT to popTextRight.text,
+            com.kazumaproject.core.ui.skin.PopupDirection.BOTTOM to popTextBottom.text,
+        ), includeEmptyCenterConnector = true)
+        showLongPressPresentation(guide)
+        return true
+    }
+
     private fun hideAllPopWindow() {
+        skinGuidePopup?.dismiss()
+        clearLongPressPresentation()
         popupWindowActive.hide()
         popupWindowLeft.hide()
         popupWindowTop.hide()
@@ -3161,6 +3485,10 @@ class GojuonKeyboardView @JvmOverloads constructor(
     }
 
     private fun setTapInActionMove() {
+        if (skinGuidePopup?.isShowing == true) {
+            skinGuidePopup?.select(com.kazumaproject.core.ui.skin.PopupDirection.CENTER)
+            return
+        }
         if (!isLongPressed) popupWindowActive.hide()
         val button = getButtonFromKey(pressedKey.key)
         if (currentInputMode.get() == InputMode.ModeEnglish &&
@@ -3208,6 +3536,17 @@ class GojuonKeyboardView @JvmOverloads constructor(
 
     private fun setFlickInActionMove(gestureType: GestureType) {
         longPressJob?.cancel()
+        if (skinGuidePopup?.isShowing == true) {
+            val direction = when (gestureType) {
+                GestureType.FlickLeft -> com.kazumaproject.core.ui.skin.PopupDirection.LEFT
+                GestureType.FlickTop -> com.kazumaproject.core.ui.skin.PopupDirection.TOP
+                GestureType.FlickRight -> com.kazumaproject.core.ui.skin.PopupDirection.RIGHT
+                GestureType.FlickBottom -> com.kazumaproject.core.ui.skin.PopupDirection.BOTTOM
+                else -> com.kazumaproject.core.ui.skin.PopupDirection.CENTER
+            }
+            skinGuidePopup?.select(direction)
+            return
+        }
         val button = getButtonFromKey(pressedKey.key)
         if (currentInputMode.get() == InputMode.ModeEnglish &&
             (gojuonCapsLockState.value.capsLockOn || gojuonCapsLockState.value.shiftOn)
@@ -3458,6 +3797,10 @@ class GojuonKeyboardView @JvmOverloads constructor(
     }
 
     private fun handleCurrentInputModeSwitch(inputMode: InputMode) {
+        if (independentMultiTouchForCurrentGesture && displayedInputMode != inputMode) {
+            cancelActiveTouch(KeyTouchCancelReason.PointerInterrupted)
+        }
+        displayedInputMode = inputMode
         when (inputMode) {
             InputMode.ModeJapanese -> {
                 setKeysInJapaneseText()

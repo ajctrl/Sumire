@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.PopupWindow
@@ -15,15 +16,26 @@ import com.kazumaproject.core.domain.flick.FixedGestureSessionConfigSource
 import com.kazumaproject.core.domain.flick.FlickGestureMath
 import com.kazumaproject.core.domain.flick.GestureSessionConfig
 import com.kazumaproject.core.domain.flick.GestureSessionConfigSource
+import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
+import com.kazumaproject.core.ui.skin.PopupDirection
+import com.kazumaproject.core.ui.skin.SkinGuidePopup
 import com.kazumaproject.custom_keyboard.data.FlickDirection
 import com.kazumaproject.custom_keyboard.data.FlickPopupColorTheme
 import com.kazumaproject.custom_keyboard.layout.SegmentedBackgroundDrawable
 import com.kazumaproject.custom_keyboard.view.StandardFlickPopupView
+import com.kazumaproject.custom_keyboard.view.skinDirection
+import java.lang.ref.WeakReference
+import java.util.WeakHashMap
 
 class StandardFlickInputController(
-    context: Context,
+    private val context: Context,
     private val gestureConfigSource: GestureSessionConfigSource
 ) {
+
+    companion object {
+        /** Legacy input keeps one guide per keyboard window. Independent input bypasses this registry. */
+        private val activeSkinGuides = WeakHashMap<ViewGroup, WeakReference<StandardFlickInputController>>()
+    }
 
     constructor(context: Context) : this(
         context = context,
@@ -54,6 +66,14 @@ class StandardFlickInputController(
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var activeGestureConfig: GestureSessionConfig? = null
+    private var inputTextTransform: (String) -> String = { it }
+    private var skinGuidePopup: SkinGuidePopup? = null
+    private var registeredGuideRoot: ViewGroup? = null
+    private var concurrentSkinGuidesProvider: () -> Boolean = { false }
+
+    fun setConcurrentSkinGuidesProvider(provider: () -> Boolean) {
+        concurrentSkinGuidesProvider = provider
+    }
 
     private val popupWindow: PopupWindow
     private val popupView = StandardFlickPopupView(context)
@@ -90,7 +110,8 @@ class StandardFlickInputController(
             sizeScalePercent = style.sizeScalePercent.coerceIn(50, 200),
             textSizeSp = style.textSizeSp.coerceIn(8f, 48f),
             backgroundColor = style.backgroundColor,
-            textColor = style.textColor
+            textColor = style.textColor,
+            skinId = style.skinId
         )
         popupView.applyPopupViewStyle(popupStyle)
     }
@@ -100,6 +121,7 @@ class StandardFlickInputController(
     }
 
     fun setInputTextTransform(transform: (String) -> String) {
+        inputTextTransform = transform
         popupView.setInputTextTransform(transform)
     }
 
@@ -129,13 +151,14 @@ class StandardFlickInputController(
     private fun handleTouchEvent(view: View, event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                dismissOtherSkinGuide(view)
                 activeGestureConfig = gestureConfigSource.snapshot()
                 anchorView = view
                 initialTouchX = event.rawX
                 initialTouchY = event.rawY
                 listener?.onPress(characterMap[FlickDirection.TAP] ?: "")
                 segmentedDrawable?.highlightDirection = FlickDirection.TAP
-                showPopup(FlickDirection.TAP)
+                showPopup(FlickDirection.TAP, refreshSkinGuide = true)
                 return true
             }
 
@@ -162,8 +185,9 @@ class StandardFlickInputController(
                         listener?.onFlick(it)
                     }
                 }
-                dismissPopup()
+                dismissPopup(animateSkinRelease = true)
                 activeGestureConfig = null
+                anchorView = null
                 return true
             }
 
@@ -179,16 +203,36 @@ class StandardFlickInputController(
         return false
     }
 
-    private fun showPopup(direction: FlickDirection) {
+    private fun showPopup(direction: FlickDirection, refreshSkinGuide: Boolean = false) {
         val keyAnchor = anchorView ?: return
         val windowAnchor = popupWindowAnchorProvider?.invoke() ?: keyAnchor
         if (!isAnchorReady(keyAnchor, windowAnchor)) {
-            if (popupWindow.isShowing) {
-                popupWindow.dismiss()
-            }
+            dismissPopup()
             return
         }
 
+        val skin = KeyboardSkinRegistry.find(popupStyle.skinId)
+        if (skin != null) {
+            popupWindow.dismiss()
+            val labels = skinGuideLabels()
+            val hasAlternatives = labels.keys.any { it != PopupDirection.CENTER }
+            if (!hasAlternatives) {
+                dismissSkinGuideImmediately()
+                return
+            }
+
+            val guide = skinGuidePopup ?: SkinGuidePopup(context).also { skinGuidePopup = it }
+            if (refreshSkinGuide || !guide.isShowing) {
+                guide.show(keyAnchor, skin, labels, popupStyle.textSizeSp)
+            }
+            registerSkinGuide(keyAnchor.rootView as? ViewGroup)
+            guide.select(direction.skinDirection())
+            return
+        }
+
+        dismissSkinGuideImmediately()
+
+        popupView.setFlickDirection(direction)
         popupView.setColors(popupBackgroundColor, popupTextColor, popupStrokeColor)
         popupView.applyPopupViewStyle(popupStyle)
 
@@ -198,6 +242,11 @@ class StandardFlickInputController(
             val text = characterMap[direction]
             popupView.updateText(text)
         }
+
+        popupView.setPadding(0, 0, 0, 0)
+        popupWindow.elevation = 8f
+        popupWindow.width = WindowManager.LayoutParams.WRAP_CONTENT
+        popupWindow.height = WindowManager.LayoutParams.WRAP_CONTENT
 
         val baseOffsetY = 10
         val flickUpAdditionalOffset = 80
@@ -221,10 +270,69 @@ class StandardFlickInputController(
         }
     }
 
-    private fun dismissPopup() {
+    private fun skinGuideLabels(): Map<PopupDirection, CharSequence> = characterMap.mapNotNull { (direction, value) ->
+        if (value.isEmpty()) return@mapNotNull null
+        val popupDirection = direction.skinDirection()
+        popupDirection to inputTextTransform(value)
+    }.toMap()
+
+    private fun dismissPopup(animateSkinRelease: Boolean = false) {
         if (popupWindow.isShowing) {
             popupWindow.dismiss()
         }
+        val guide = skinGuidePopup
+        if (guide?.isShowing != true) {
+            unregisterSkinGuide()
+            return
+        }
+
+        val releaseAnimationDuration = if (animateSkinRelease) {
+            KeyboardSkinRegistry.find(popupStyle.skinId)?.popupReleaseAnimationMillis ?: 0L
+        } else 0L
+        val dismissalAnchor = anchorView
+        if (releaseAnimationDuration <= 0L || dismissalAnchor == null || !dismissalAnchor.isAttachedToWindow) {
+            dismissSkinGuideImmediately()
+            return
+        }
+
+        guide.dismiss(
+            animated = true,
+            animationDurationMillis = releaseAnimationDuration,
+            onDismissComplete = ::unregisterSkinGuide,
+        )
+    }
+
+    private fun dismissOtherSkinGuide(anchor: View) {
+        val root = anchor.rootView as? ViewGroup ?: return
+        val active = activeSkinGuides[root]?.get()
+        if (active == null) {
+            activeSkinGuides.remove(root)
+        } else if (active !== this) {
+            active.dismissSkinGuideImmediately()
+        }
+    }
+
+    private fun registerSkinGuide(root: ViewGroup?) {
+        if (concurrentSkinGuidesProvider()) {
+            unregisterSkinGuide()
+            return
+        }
+        if (root == null) return
+        if (registeredGuideRoot !== root) unregisterSkinGuide()
+        registeredGuideRoot = root
+        activeSkinGuides[root] = WeakReference(this)
+    }
+
+    private fun unregisterSkinGuide() {
+        registeredGuideRoot?.let { root ->
+            if (activeSkinGuides[root]?.get() === this) activeSkinGuides.remove(root)
+        }
+        registeredGuideRoot = null
+    }
+
+    private fun dismissSkinGuideImmediately() {
+        skinGuidePopup?.dismiss()
+        unregisterSkinGuide()
     }
 
     private fun calculateDirection(dx: Float, dy: Float): FlickDirection {
@@ -254,6 +362,7 @@ class StandardFlickInputController(
         listener?.onCanceled()
         activeGestureConfig = null
         dismissPopup()
+        anchorView = null
     }
 
     private fun isAnchorReady(keyAnchor: View, windowAnchor: View?): Boolean {

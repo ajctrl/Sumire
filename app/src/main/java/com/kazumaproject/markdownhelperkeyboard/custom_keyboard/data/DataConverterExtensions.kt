@@ -41,6 +41,7 @@ fun FlickMapping.toFlickAction(): FlickAction {
         "DELETE" -> KeyAction.Delete
         "BACKSPACE" -> KeyAction.Backspace
         "SPACE" -> KeyAction.Space
+        "CommitAndInsertSpace" -> KeyAction.CommitAndInsertSpace
         "NEW_LINE" -> KeyAction.NewLine
         "ForceNewLine" -> KeyAction.ForceNewLine
         "ENTER" -> KeyAction.Enter
@@ -51,6 +52,7 @@ fun FlickMapping.toFlickAction(): FlickAction {
         "MOVE_CURSOR_DOWN" -> KeyAction.MoveCursorDown
         "MOVE_CURSOR_RIGHT" -> KeyAction.MoveCursorRight
         "SELECT_ALL" -> KeyAction.SelectAll
+        "CUT" -> KeyAction.Cut
         "PASTE" -> KeyAction.Paste
         "COPY" -> KeyAction.Copy
         "CHANGE_INPUT_MODE" -> KeyAction.ChangeInputMode
@@ -66,6 +68,7 @@ fun FlickMapping.toFlickAction(): FlickAction {
         "SwitchToNumber" -> KeyAction.SwitchToNumberLayout
         "DeleteUntilSymbol" -> KeyAction.DeleteUntilSymbol
         "DeleteAfterCursorUntilSymbol" -> KeyAction.DeleteAfterCursorUntilSymbol
+        "DeleteAfterCursor" -> KeyAction.DeleteAfterCursor
         "UndoLastDelete" -> KeyAction.UndoLastDelete
         "SwitchKatakana" -> KeyAction.ToggleKatakana
         "VoiceInput" -> KeyAction.VoiceInput
@@ -98,6 +101,7 @@ fun CircularFlickMapping.toFlickAction(): FlickAction {
         "DELETE" -> KeyAction.Delete
         "BACKSPACE" -> KeyAction.Backspace
         "SPACE" -> KeyAction.Space
+        "CommitAndInsertSpace" -> KeyAction.CommitAndInsertSpace
         "NEW_LINE" -> KeyAction.NewLine
         "ENTER" -> KeyAction.Enter
         "CONVERT" -> KeyAction.Convert
@@ -107,6 +111,7 @@ fun CircularFlickMapping.toFlickAction(): FlickAction {
         "MOVE_CURSOR_DOWN" -> KeyAction.MoveCursorDown
         "MOVE_CURSOR_RIGHT" -> KeyAction.MoveCursorRight
         "SELECT_ALL" -> KeyAction.SelectAll
+        "CUT" -> KeyAction.Cut
         "PASTE" -> KeyAction.Paste
         "COPY" -> KeyAction.Copy
         "CHANGE_INPUT_MODE" -> KeyAction.ChangeInputMode
@@ -122,6 +127,7 @@ fun CircularFlickMapping.toFlickAction(): FlickAction {
         "SwitchToNumber" -> KeyAction.SwitchToNumberLayout
         "DeleteUntilSymbol" -> KeyAction.DeleteUntilSymbol
         "DeleteAfterCursorUntilSymbol" -> KeyAction.DeleteAfterCursorUntilSymbol
+        "DeleteAfterCursor" -> KeyAction.DeleteAfterCursor
         "UndoLastDelete" -> KeyAction.UndoLastDelete
         "SwitchKatakana" -> KeyAction.ToggleKatakana
         "VoiceInput" -> KeyAction.VoiceInput
@@ -159,6 +165,7 @@ fun FlickAction.toDbStrings(): Pair<String, String?> {
             KeyAction.Delete -> "DELETE" to null
             KeyAction.Backspace -> "BACKSPACE" to null
             KeyAction.Space -> "SPACE" to null
+            KeyAction.CommitAndInsertSpace -> "CommitAndInsertSpace" to null
             KeyAction.NewLine -> "NEW_LINE" to null
             KeyAction.Enter -> "ENTER" to null
             KeyAction.Convert -> "CONVERT" to null
@@ -168,6 +175,7 @@ fun FlickAction.toDbStrings(): Pair<String, String?> {
             KeyAction.MoveCursorDown -> "MOVE_CURSOR_DOWN" to null
             KeyAction.MoveCursorRight -> "MOVE_CURSOR_RIGHT" to null
             KeyAction.SelectAll -> "SELECT_ALL" to null
+            KeyAction.Cut -> "CUT" to null
             KeyAction.Paste -> "PASTE" to null
             KeyAction.Copy -> "COPY" to null
             KeyAction.ChangeInputMode -> "CHANGE_INPUT_MODE" to null
@@ -183,6 +191,7 @@ fun FlickAction.toDbStrings(): Pair<String, String?> {
             KeyAction.SwitchToNumberLayout -> "SwitchToNumber" to null
             KeyAction.DeleteUntilSymbol -> "DeleteUntilSymbol" to null
             KeyAction.DeleteAfterCursorUntilSymbol -> "DeleteAfterCursorUntilSymbol" to null
+            KeyAction.DeleteAfterCursor -> "DeleteAfterCursor" to null
             KeyAction.UndoLastDelete -> "UndoLastDelete" to null
             KeyAction.ToggleKatakana -> "SwitchKatakana" to null
             KeyAction.VoiceInput -> "VoiceInput" to null

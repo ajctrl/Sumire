@@ -54,8 +54,8 @@ android {
         applicationId "com.example.sumire"
         minSdk 24
         targetSdk 36
-        versionCode 804
-        versionName "1.7.111"
+        versionCode 821
+        versionName "1.7.128"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "SUMIRE_SYNC_PACKAGE_ID", "\"${sumireSyncPackageId}\""
     }
@@ -149,7 +149,12 @@ android {
     }
 
     testOptions {
-        unitTests.includeAndroidResources = true
+        unitTests {
+            includeAndroidResources = true
+            all {
+                maxHeapSize = '2g'
+            }
+        }
     }
 
     androidResources {

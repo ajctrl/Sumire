@@ -115,7 +115,6 @@ object SettingDestinations {
         "user_dictionary_preference",
         "user_template_preference",
         "text_macro_candidate_preference",
-        "text_macro_manage_preference",
         "custom_romaji_preference",
         "shortcut_toolbar_item_preference",
         "candidate_tab_order_preference",
@@ -142,20 +141,24 @@ object SettingDestinations {
 
     fun frequent(context: Context): List<SettingDestination> = defaultFrequent(context)
 
-    fun defaultFrequent(context: Context): List<SettingDestination> {
-        val defaultKeys = listOf(
-            "keyboard_screen_preference",
-            "setting_route_keyboard_theme",
-            "candidate_view_height_setting_fragment_preference",
-            "candidate_view_height_landscape_setting_fragment_preference",
-            "setting_route_input_method",
-            "setting_route_dictionary",
-            "clipboard_history_preference_fragment",
-            "setting_route_zenz_preferences",
-            "setting_route_custom_keyboard_preferences",
-        )
-        val candidates = frequentCandidates(context).associateBy { it.key }
-        return defaultKeys.mapNotNull { candidates[it] }
+    private val defaultFrequentKeys = listOf(
+        "keyboard_screen_preference",
+        "setting_route_keyboard_theme",
+        "candidate_view_height_setting_fragment_preference",
+        "candidate_view_height_landscape_setting_fragment_preference",
+        "setting_route_input_method",
+        "setting_route_dictionary",
+        "clipboard_history_preference_fragment",
+        "setting_route_zenz_preferences",
+        "setting_route_custom_keyboard_preferences",
+    )
+
+    fun defaultFrequent(context: Context): List<SettingDestination> =
+        defaultFrequent(frequentCandidates(context))
+
+    fun defaultFrequent(candidates: List<SettingDestination>): List<SettingDestination> {
+        val candidatesByKey = candidates.associateBy { it.key }
+        return defaultFrequentKeys.mapNotNull { candidatesByKey[it] }
     }
 
     fun frequentCandidates(context: Context): List<SettingDestination> {
@@ -486,6 +489,7 @@ object SettingDestinations {
         "keyboard_corner_radius_dp_preference",
         "candidate_column_preference",
         "candidate_tab_visibility_preference",
+        "stabilize_candidate_strip_height_preference",
         "candidate_tab_order_preference",
         "live_conversion_preference",
         "live_conversion_start_length_preference",
@@ -497,6 +501,8 @@ object SettingDestinations {
         "setting_route_sumire_preferences",
         "setting_route_kana_preferences",
         "setting_route_qwerty_preferences",
+        "setting_route_qwerty_english_preferences",
+        "setting_route_qwerty_romaji_preferences",
         "setting_route_custom_keyboard_preferences",
         "setting_route_tablet_preferences",
         "flick_input_only_preference",
@@ -504,11 +510,15 @@ object SettingDestinations {
         "flick_sensitivity_preference",
         "flick_threshold_shape_preference",
         "long_press_timeout_preference",
+        "independent_multi_touch_preference",
         "delete_key_flick_left_preference",
         "undo_enable_preference",
         "vibration_preference",
         "key_sound_preference",
         "space_key_preference",
+        "tenkey_space_flick_preference",
+        "qwerty_romaji_space_flick_preference",
+        "qwerty_english_space_flick_preference",
         "clipboard_history_preference_fragment",
         "clipboard_preview_enable_preference",
         "shortcut_toolbar_visibility_preference",
@@ -528,7 +538,6 @@ object SettingDestinations {
         "user_dictionary_preference",
         "user_template_preference",
         "text_macro_candidate_preference",
-        "text_macro_manage_preference",
         "enable_ai_conversion_zenz_preference",
         "enable_zenz_rerank_preference",
         "zenz_model_select_preference",
@@ -540,6 +549,15 @@ object SettingDestinations {
     )
 
     fun categories(context: Context): List<SettingDestination> = listOf(
+        destination(
+            key = "setting_route_split_keyboard",
+            title = context.getString(R.string.split_keyboard_title),
+            summary = context.getString(R.string.split_keyboard_summary),
+            category = SettingCategory.INPUT_METHOD,
+            keywords = listOf("split", "分割", "メイン", "サブ", "floating"),
+            destinationId = R.id.splitKeyboardPreferenceFragment,
+            iconRes = CoreR.drawable.keyboard_24px,
+        ),
         destination(
             key = "setting_route_keyboard_display",
             title = context.getString(R.string.setting_category_keyboard_display_title),
@@ -584,15 +602,6 @@ object SettingDestinations {
             keywords = listOf("dictionary", "learn", "ng", "template"),
             destinationId = R.id.dictionaryPreferenceFragment,
             iconRes = CoreR.drawable.dictionary_24px,
-        ),
-        destination(
-            key = "setting_route_text_macro",
-            title = context.getString(R.string.setting_category_text_macro_title),
-            summary = context.getString(R.string.setting_category_text_macro_summary),
-            category = SettingCategory.TEXT_MACRO,
-            keywords = listOf("macro", "dynamic", "template", "snippet", "定型文"),
-            destinationId = R.id.textMacroFragment,
-            iconRes = CoreR.drawable.book_3_24px,
         ),
         destination(
             key = "setting_route_ai_conversion",
@@ -762,7 +771,6 @@ object SettingDestinations {
             "setting_route_conversion_engine" -> R.id.conversionEnginePreferenceFragment
             "setting_route_utility_candidates" -> R.id.utilityCandidatePreferenceFragment
             "setting_route_dictionary" -> R.id.dictionaryPreferenceFragment
-            "setting_route_text_macro" -> R.id.textMacroFragment
             "setting_route_ai_conversion" -> R.id.aiConversionPreferenceFragment
             "setting_route_clipboard_shortcut" -> R.id.clipboardShortcutPreferenceFragment
             "setting_route_operation_feedback" -> R.id.operationFeedbackPreferenceFragment
@@ -784,6 +792,8 @@ object SettingDestinations {
             "key_popup_text_color_preference" -> R.id.keyboardThemeFragment
             "setting_route_kana_preferences" -> R.id.kanaPreferenceFragment
             "setting_route_qwerty_preferences" -> R.id.qwertyPreferenceFragment
+            "setting_route_qwerty_english_preferences" -> R.id.qwertyEnglishPreferenceFragment
+            "setting_route_qwerty_romaji_preferences" -> R.id.qwertyRomajiPreferenceFragment
             "setting_route_sumire_preferences" -> R.id.sumirePreferenceFragment
             "setting_route_custom_keyboard_preferences" -> R.id.customKeyboardPreferenceFragment
             "setting_route_tablet_preferences" -> R.id.tabletPreferenceFragment
@@ -811,7 +821,6 @@ object SettingDestinations {
             "n_gram_rule_preference" -> R.id.ngramRuleFragment
             "candidate_order_override_preference" -> R.id.candidateOrderOverrideFragment
             "custom_zero_query_dictionary_preference" -> R.id.customZeroQueryDictionaryFragment
-            "text_macro_manage_preference" -> R.id.textMacroFragment
             "ng_word_preference" -> R.id.ngWordFragment
             "gemma_prompt_template_management_preference" -> R.id.gemmaPromptTemplateFragment
             "kana_keyboard_letter_size_preference" -> R.id.tenKeyCandidateLetterSizeFragment

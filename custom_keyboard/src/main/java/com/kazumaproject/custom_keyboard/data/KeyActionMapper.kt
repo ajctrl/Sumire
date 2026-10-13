@@ -42,8 +42,18 @@ object KeyActionMapper {
                 com.kazumaproject.core.R.drawable.backspace_24px_after_cursor
             ),
             DisplayAction(
+                KeyAction.DeleteAfterCursor,
+                context.getString(R.string.action_delete_after_cursor_one),
+                com.kazumaproject.core.R.drawable.backspace_24px_after_cursor
+            ),
+            DisplayAction(
                 KeyAction.Space,
                 context.getString(R.string.action_space),
+                com.kazumaproject.core.R.drawable.baseline_space_bar_24
+            ),
+            DisplayAction(
+                KeyAction.CommitAndInsertSpace,
+                context.getString(R.string.action_commit_and_insert_space),
                 com.kazumaproject.core.R.drawable.baseline_space_bar_24
             ),
             DisplayAction(
@@ -67,6 +77,11 @@ object KeyActionMapper {
                 com.kazumaproject.core.R.drawable.baseline_keyboard_return_24
             ),
             DisplayAction(KeyAction.ForceNewLine, context.getString(R.string.action_new_line)),
+            DisplayAction(
+                KeyAction.Cut,
+                context.getString(R.string.action_cut),
+                com.kazumaproject.core.R.drawable.content_cut_24dp
+            ),
             DisplayAction(
                 KeyAction.Paste,
                 context.getString(R.string.action_paste),
@@ -191,11 +206,14 @@ object KeyActionMapper {
             KeyAction.Delete -> com.kazumaproject.core.R.drawable.backspace_24px
             KeyAction.DeleteUntilSymbol -> com.kazumaproject.core.R.drawable.backspace_24px_until_symbol
             KeyAction.DeleteAfterCursorUntilSymbol -> com.kazumaproject.core.R.drawable.backspace_24px_after_cursor
+            KeyAction.DeleteAfterCursor -> com.kazumaproject.core.R.drawable.backspace_24px_after_cursor
             KeyAction.Space,
+            KeyAction.CommitAndInsertSpace,
             KeyAction.ForceHalfWidthSpace,
             KeyAction.ForceFullWidthSpace -> com.kazumaproject.core.R.drawable.baseline_space_bar_24
             KeyAction.Convert -> com.kazumaproject.core.R.drawable.henkan
             KeyAction.Enter -> com.kazumaproject.core.R.drawable.baseline_keyboard_return_24
+            KeyAction.Cut -> com.kazumaproject.core.R.drawable.content_cut_24dp
             KeyAction.Paste -> com.kazumaproject.core.R.drawable.content_paste_24px
             KeyAction.Copy -> com.kazumaproject.core.R.drawable.content_copy_24dp
             KeyAction.SwitchToNextIme -> com.kazumaproject.core.R.drawable.language_24dp
@@ -230,6 +248,7 @@ object KeyActionMapper {
             is KeyAction.Delete -> "Delete"
             is KeyAction.Backspace -> "Backspace"
             is KeyAction.Space -> "Space"
+            is KeyAction.CommitAndInsertSpace -> "CommitAndInsertSpace"
             is KeyAction.NewLine -> "NewLine"
             is KeyAction.ForceNewLine -> "ForceNewLine"
             is KeyAction.Enter -> "Enter"
@@ -242,6 +261,7 @@ object KeyActionMapper {
             is KeyAction.SelectLeft -> "SelectLeft"
             is KeyAction.SelectRight -> "SelectRight"
             is KeyAction.SelectAll -> "SelectAll"
+            is KeyAction.Cut -> "Cut"
             is KeyAction.Paste -> "Paste"
             is KeyAction.Copy -> "Copy"
             is KeyAction.ChangeInputMode -> "ChangeInputMode"
@@ -266,6 +286,7 @@ object KeyActionMapper {
 
             is KeyAction.DeleteUntilSymbol -> "DeleteUntilSymbol"
             is KeyAction.DeleteAfterCursorUntilSymbol -> "DeleteAfterCursorUntilSymbol"
+            is KeyAction.DeleteAfterCursor -> "DeleteAfterCursor"
             is KeyAction.ToggleKatakana -> "SwitchKatakana"
             is KeyAction.VoiceInput -> "VoiceInput"
             is KeyAction.SwitchDirectMode -> "SwitchDirectMode"
@@ -292,6 +313,7 @@ object KeyActionMapper {
             "Delete" -> KeyAction.Delete
             "Backspace" -> KeyAction.Backspace
             "Space" -> KeyAction.Space
+            "CommitAndInsertSpace" -> KeyAction.CommitAndInsertSpace
             "NewLine" -> KeyAction.NewLine
             "Enter" -> KeyAction.Enter
             "Convert" -> KeyAction.Convert
@@ -303,6 +325,7 @@ object KeyActionMapper {
             "SelectLeft" -> KeyAction.SelectLeft
             "SelectRight" -> KeyAction.SelectRight
             "SelectAll" -> KeyAction.SelectAll
+            "Cut" -> KeyAction.Cut
             "Paste" -> KeyAction.Paste
             "Copy" -> KeyAction.Copy
             "ChangeInputMode" -> KeyAction.ChangeInputMode
@@ -320,6 +343,7 @@ object KeyActionMapper {
             "MoveCustomKeyboardTab" -> KeyAction.MoveCustomKeyboardTab
             "DeleteUntilSymbol" -> KeyAction.DeleteUntilSymbol
             "DeleteAfterCursorUntilSymbol" -> KeyAction.DeleteAfterCursorUntilSymbol
+            "DeleteAfterCursor" -> KeyAction.DeleteAfterCursor
             "SwitchKatakana" -> KeyAction.ToggleKatakana
             "SwitchRomajiEnglish" -> KeyAction.SwitchRomajiEnglish
             "VoiceInput" -> KeyAction.VoiceInput

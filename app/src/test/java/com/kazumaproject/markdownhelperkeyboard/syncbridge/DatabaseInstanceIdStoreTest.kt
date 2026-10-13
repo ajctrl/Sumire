@@ -7,11 +7,13 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
 import org.robolectric.RobolectricTestRunner
 import java.io.File
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class DatabaseInstanceIdStoreTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val idFile by lazy { File(context.noBackupFilesDir, "syncbridge-instance-id") }

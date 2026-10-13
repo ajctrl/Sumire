@@ -79,6 +79,7 @@ class FlickLongPressInputController(
 
         isLongPressActive = true
         updatePopupCharacters()
+        popupView?.setPresentationMode(TfbiFlickPopupView.PresentationMode.LONG_PRESS)
         popupView?.highlightDirection(direction)
     }
 
@@ -93,7 +94,8 @@ class FlickLongPressInputController(
             sizeScalePercent = style.sizeScalePercent.coerceIn(50, 200),
             textSizeSp = style.textSizeSp.coerceIn(8f, 48f),
             backgroundColor = style.backgroundColor,
-            textColor = style.textColor
+            textColor = style.textColor,
+            skinId = style.skinId
         )
         popupView?.applyPopupViewStyle(popupStyle)
     }
@@ -163,6 +165,7 @@ class FlickLongPressInputController(
 
         currentDirection = nextDirection
         isLongPressActive = false
+        popupView?.setPresentationMode(TfbiFlickPopupView.PresentationMode.FLICK)
         scheduleLongPressIfNeeded(nextDirection)
         updatePopupCharacters()
         popupView?.highlightDirection(nextDirection ?: TfbiFlickDirection.TAP)

@@ -10,11 +10,16 @@ import android.util.TypedValue
 import android.view.View
 import androidx.annotation.ColorInt
 import androidx.core.content.ContextCompat
+import com.kazumaproject.core.domain.skin.KeyboardSkinId
+import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
 import com.kazumaproject.core.data.popup.PopupViewStyle
+import com.kazumaproject.core.ui.font.KeyboardFontAware
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
 import kotlin.math.ceil
 import kotlin.math.min
 
-class VariationsPopupView(context: Context) : View(context) {
+class VariationsPopupView(context: Context) : View(context), KeyboardFontAware {
 
     // ★ デザインモードの定義
     enum class PopupStyle {
@@ -56,6 +61,15 @@ class VariationsPopupView(context: Context) : View(context) {
         textSize = 60f
         color = Color.BLACK
     }
+    private var keyboardFontSnapshot = KeyboardFontSnapshot()
+
+    override fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        KeyboardFontApplicator.track(this)
+        keyboardFontSnapshot = snapshot
+        KeyboardFontApplicator.apply(flatTextPaint, snapshot)
+        KeyboardFontApplicator.apply(neuTextPaint, snapshot)
+        invalidate()
+    }
     private val neuBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -72,7 +86,12 @@ class VariationsPopupView(context: Context) : View(context) {
     }
     private val itemCornerRadius = 15f
 
+    private var skinId = KeyboardSkinId.DEFAULT
+    private var skinBackground: android.graphics.drawable.Drawable? = null
+
     fun applyPopupViewStyle(style: PopupViewStyle) {
+        skinBackground = null
+        skinId = style.skinId
         popupBackgroundColor = style.backgroundColor
         popupTextColor = style.textColor
         val textSizePx = TypedValue.applyDimension(
@@ -139,6 +158,27 @@ class VariationsPopupView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (chars.isEmpty()) return
+        KeyboardSkinRegistry.find(skinId)?.let { skin ->
+            val background = skinBackground ?: skin.variationDrawable(resources).also { skinBackground = it }
+            background.setBounds(0, 0, width, height)
+            background.draw(canvas)
+            val paint = Paint(flatTextPaint).apply { textAlign = Paint.Align.CENTER }
+            chars.forEachIndexed { index, char ->
+                val left = (index % maxColumns) * itemWidth
+                val top = (index / maxColumns) * itemHeight
+                if (index == selectedIndex) {
+                    paint.color = skin.palette.selection
+                    val inset = 3 * resources.displayMetrics.density
+                    val radius = 8 * resources.displayMetrics.density
+                    canvas.drawRoundRect(left + inset, top + inset, left + itemWidth - inset,
+                        top + itemHeight - inset, radius, radius, paint)
+                }
+                paint.color = if (index == selectedIndex) skin.palette.selectionText else skin.palette.text
+                canvas.drawText(char.toString(), left + itemWidth / 2,
+                    top + itemHeight / 2 - (paint.ascent() + paint.descent()) / 2, paint)
+            }
+            return
+        }
 
         // 共通：描画領域のクリップ
         clipPath.reset()

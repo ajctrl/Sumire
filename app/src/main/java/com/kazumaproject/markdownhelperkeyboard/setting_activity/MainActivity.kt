@@ -1,6 +1,7 @@
 package com.kazumaproject.markdownhelperkeyboard.setting_activity
 
 import android.content.Intent
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuInflater
@@ -8,8 +9,16 @@ import android.view.MenuItem
 import android.view.View
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
-import androidx.constraintlayout.widget.ConstraintSet
+import androidx.core.graphics.Insets
 import androidx.core.view.MenuProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.doOnAttach
+import androidx.core.view.updatePadding
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withResumed
+import androidx.lifecycle.withStarted
 import androidx.navigation.NavController
 import androidx.navigation.NavOptions
 import androidx.navigation.fragment.NavHostFragment
@@ -20,31 +29,124 @@ import androidx.navigation.ui.setupWithNavController
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.color.DynamicColorsOptions
+import com.kazumaproject.markdownhelperkeyboard.local_font.LocalFontRepository
 import com.kazumaproject.markdownhelperkeyboard.R
 import com.kazumaproject.markdownhelperkeyboard.databinding.ActivityMainBinding
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import javax.inject.Provider
 import com.kazumaproject.core.R as CoreR
 
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
 
     @Inject
-    lateinit var appPreference: AppPreference
+    lateinit var appPreferenceProvider: Provider<AppPreference>
+    @Inject
+    lateinit var localFontRepository: LocalFontRepository
+    private lateinit var appPreference: AppPreference
     private lateinit var binding: ActivityMainBinding
     private lateinit var mainNavController: NavController
+    private var bottomNavigationView: BottomNavigationView? = null
     private var currentDestinationId: Int? = null
+    private var restoredNavHost: NavHostFragment? = null
+    private var deferredFragmentManagerState: Bundle? = null
+    private var initialIntentHandled = false
+    private var pendingIntentReceivedDuringInitialization = false
+    private var pendingIntentRequest: String? = null
+    internal var isSettingsContentReady = false
+        private set
+
+    init {
+        // FragmentActivity restores fragments when ComponentActivity creates its context,
+        // before super.onCreate() returns. Cap the restored host before dispatchCreate()
+        // so its child preference fragments cannot read preferences on the UI thread.
+        addOnContextAvailableListener {
+            restoredNavHost = supportFragmentManager
+                .findFragmentById(R.id.nav_host_fragment_activity_main) as? NavHostFragment
+            restoredNavHost?.let { host ->
+                supportFragmentManager.beginTransaction()
+                    .setMaxLifecycle(host, Lifecycle.State.INITIALIZED)
+                    .commitNow()
+            }
+        }
+    }
+
+    private val destinationsWithoutBottomNavigation = setOf(
+        R.id.candidateViewHeightSettingFragment,
+        R.id.candidateHeightLandscapeSettingFragment,
+        R.id.candidateHeightDefaultsFragment,
+        R.id.localFontSettingsFragment,
+    )
     private val destinationsWithOwnToolbar = setOf(
         R.id.candidateViewHeightSettingFragment,
         R.id.candidateHeightLandscapeSettingFragment,
+        R.id.candidateHeightDefaultsFragment,
         R.id.shortcutToolbarSizeSettingFragment,
     )
     private val destinationsWithoutSharedActionBar =
         destinationsWithOwnToolbar + R.id.enableKeyboardFragment
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // ComponentActivity consumes the nested saved-state bundle while restoring
+        // FragmentManager. Keep the original fragment state for saves made before
+        // the restored NavHost is allowed to create its child fragments.
+        deferredFragmentManagerState = savedInstanceState
+            ?.getBundle(SAVED_STATE_REGISTRY_KEY)
+            ?.getBundle(FRAGMENT_MANAGER_STATE_KEY)
+            ?.let(::Bundle)
+        initialIntentHandled = savedInstanceState?.getBoolean(
+            INITIAL_INTENT_HANDLED_KEY,
+            true,
+        ) ?: false
+        pendingIntentReceivedDuringInitialization = savedInstanceState
+            ?.getBoolean(PENDING_INTENT_RECEIVED_KEY) ?: false
+        pendingIntentRequest = savedInstanceState?.getString(PENDING_INTENT_REQUEST_KEY)
+
         super.onCreate(savedInstanceState)
+        // Window fitting must be configured before the delayed preferences load.
+        // Configuring it after the Activity has started can leave AppCompat's
+        // ActionBar and content with different system-bar insets.
+        enableEdgeToEdge()
+        lifecycleScope.launch {
+            appPreference = withContext(Dispatchers.IO) {
+                initializationGateForTest?.invoke()
+                appPreferenceProvider.get().also { it.awaitInitialization() }
+            }
+            val initializedWhileStarted = lifecycle.withStarted {
+                initializeSettingsContentIfSafe()
+            }
+            if (!initializedWhileStarted) {
+                lifecycle.withResumed {
+                    initializeSettingsContentIfSafe()
+                }
+            }
+            localFontRepository.loadIfNeeded()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(INITIAL_INTENT_HANDLED_KEY, initialIntentHandled)
+        outState.putBoolean(
+            PENDING_INTENT_RECEIVED_KEY,
+            pendingIntentReceivedDuringInitialization,
+        )
+        outState.putString(PENDING_INTENT_REQUEST_KEY, pendingIntentRequest)
+
+        deferredFragmentManagerState?.let { deferredState ->
+            val registryState = outState.getBundle(SAVED_STATE_REGISTRY_KEY) ?: Bundle()
+            registryState.putBundle(FRAGMENT_MANAGER_STATE_KEY, Bundle(deferredState))
+            outState.putBundle(SAVED_STATE_REGISTRY_KEY, registryState)
+        }
+    }
+
+    private fun initializeSettingsContent() {
         val seedColor = appPreference.seedColor
+        val dynamicColorsAvailable = DynamicColors.isDynamicColorAvailable()
 
         if (seedColor == 0x00000000) {
             DynamicColors.applyToActivityIfAvailable(this)
@@ -57,14 +159,48 @@ class MainActivity : AppCompatActivity() {
                 options
             )
         }
-        enableEdgeToEdge()
-
+        if (dynamicColorsAvailable) {
+            // AppCompat may have created decor while preferences loaded.
+            themedBackground(android.R.attr.windowBackground)?.let(window::setBackgroundDrawable)
+        }
+        // Creating the restored host now also creates its child preference fragments.
+        // AppPreference is ready, and the activity theme has already been applied.
+        restoredNavHost?.let { host ->
+            supportFragmentManager.beginTransaction()
+                .setMaxLifecycle(host, Lifecycle.State.CREATED)
+                .commitNow()
+        }
         binding = ActivityMainBinding.inflate(layoutInflater)
+        // AppCompat's ActionBarOverlayLayout includes the visible ActionBar in the
+        // content insets. Apply those insets once, then consume them for descendants.
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout(),
+            )
+            view.updatePadding(
+                left = bars.left,
+                top = bars.top,
+                right = bars.right,
+                bottom = bars.bottom,
+            )
+            WindowInsetsCompat.Builder(insets)
+                .setInsets(
+                    WindowInsetsCompat.Type.systemBars() or
+                        WindowInsetsCompat.Type.displayCutout(),
+                    Insets.NONE,
+                )
+                .build()
+        }
         setContentView(binding.root)
+        // The content can be attached after the decor's first inset dispatch.
+        binding.root.doOnAttach { root ->
+            root.post { ViewCompat.requestApplyInsets(root) }
+        }
 
-        val navView: BottomNavigationView = binding.navView
         mainNavController = findMainNavController()
         val navController = mainNavController
+        installNavigationGraph(navController)
         val appBarConfiguration = AppBarConfiguration(
             setOf(
                 R.id.navigation_setting,
@@ -74,7 +210,10 @@ class MainActivity : AppCompatActivity() {
             )
         )
         setupActionBarWithNavController(navController, appBarConfiguration)
-        setupBottomNavigation(navView, navController)
+        if (dynamicColorsAvailable) {
+            themedBackground(com.google.android.material.R.attr.colorSurfaceContainer)
+                ?.let { supportActionBar?.setBackgroundDrawable(it) }
+        }
         setupSettingHomeSwitchMenu(navController)
         applySettingHomeModeFromPreference(navController)
         navController.addOnDestinationChangedListener { _, destination, _ ->
@@ -82,24 +221,69 @@ class MainActivity : AppCompatActivity() {
             if (destination.id == R.id.navigation_setting ||
                 destination.id == R.id.settingMainFragment
             ) {
-                navView.menu.findItem(R.id.navigation_setting)?.isChecked = true
+                bottomNavigationView
+                    ?.menu
+                    ?.findItem(R.id.navigation_setting)
+                    ?.isChecked = true
             }
+            updateBottomNavigationVisibility(
+                appPreference.setting_use_new_home_screen_preference,
+                navController,
+            )
             updateSharedActionBarVisibility(destination.id)
             invalidateOptionsMenu()
         }
 
-        val handledIntent = handleIntent(intent)
-        if (savedInstanceState == null && !handledIntent) {
-            navigateToPreferredSettingHome(navController)
+        if (pendingIntentReceivedDuringInitialization) {
+            handleSettingRequest(pendingIntentRequest)
+            pendingIntentReceivedDuringInitialization = false
+            pendingIntentRequest = null
+            initialIntentHandled = true
+        } else if (!initialIntentHandled) {
+            if (!handleIntent(intent)) {
+                navigateToPreferredSettingHome(navController)
+            }
+            initialIntentHandled = true
+        }
+        isSettingsContentReady = true
+    }
+
+    private fun initializeSettingsContentIfSafe(): Boolean {
+        if (isFinishing || isDestroyed || supportFragmentManager.isStateSaved) return false
+
+        initializeSettingsContent()
+        restoredNavHost?.let { host ->
+            supportFragmentManager.beginTransaction()
+                .setMaxLifecycle(host, Lifecycle.State.RESUMED)
+                .commitNow()
+        }
+        deferredFragmentManagerState = null
+        return true
+    }
+
+    private fun themedBackground(attribute: Int): Drawable? {
+        val attrs = theme.obtainStyledAttributes(intArrayOf(attribute))
+        return try {
+            attrs.getDrawable(0)
+        } finally {
+            attrs.recycle()
         }
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        handleIntent(intent)
+        setIntent(intent)
+        if (isSettingsContentReady) {
+            handleIntent(intent)
+            initialIntentHandled = true
+        } else {
+            pendingIntentReceivedDuringInitialization = true
+            pendingIntentRequest = intent?.getStringExtra(OPEN_SETTING_ACTIVITY_EXTRA)
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean {
+        if (!isSettingsContentReady) return super.onSupportNavigateUp()
         val navController = currentNavController()
         return navController.navigateUp() || super.onSupportNavigateUp()
     }
@@ -116,23 +300,23 @@ class MainActivity : AppCompatActivity() {
      * Intentを処理して適切な画面に遷移する
      */
     private fun handleIntent(intent: Intent?): Boolean {
-        val extra = intent?.getStringExtra("openSettingActivity")
-        return extra?.let { request ->
-            val navController = currentNavController()
-            when (request) {
-                "setting_fragment_request" -> {
-                    navigateToPreferredSettingHome(navController)
-                    true
-                }
+        return handleSettingRequest(intent?.getStringExtra(OPEN_SETTING_ACTIVITY_EXTRA))
+    }
 
-                "dictionary_fragment_request" -> {
-                    navController.navigate(R.id.navigation_learn_dictionary)
-                    true
-                }
-
-                else -> false
+    private fun handleSettingRequest(request: String?): Boolean {
+        return when (request) {
+            "setting_fragment_request" -> {
+                navigateToPreferredSettingHome(currentNavController())
+                true
             }
-        } ?: false
+
+            "dictionary_fragment_request" -> {
+                currentNavController().navigate(R.id.navigation_learn_dictionary)
+                true
+            }
+
+            else -> false
+        }
     }
 
     private fun currentNavController(): NavController {
@@ -149,39 +333,55 @@ class MainActivity : AppCompatActivity() {
         return navHostFragment.navController
     }
 
+    private fun installNavigationGraph(navController: NavController) {
+        if (navController.currentDestination != null) return
+        val graph = navController.navInflater.inflate(R.navigation.mobile_navigation)
+        graph.setStartDestination(preferredSettingHomeDestination())
+        navController.graph = graph
+    }
+
+    private fun preferredSettingHomeDestination(): Int =
+        if (appPreference.setting_use_new_home_screen_preference) {
+            R.id.navigation_setting
+        } else {
+            R.id.settingMainFragment
+        }
+
     fun applySettingHomeModeFromPreference(navController: NavController? = null) {
         val useNewDashboard = appPreference.setting_use_new_home_screen_preference
-        updateBottomNavigationVisibility(useNewDashboard)
-        updateNavHostBottomConstraint(useNewDashboard)
-        navController?.let { ensurePreferredSettingHomeIfNeeded(it) }
+        val resolvedNavController = navController ?: currentNavController()
+        updateBottomNavigationVisibility(useNewDashboard, resolvedNavController)
+        ensurePreferredSettingHomeIfNeeded(resolvedNavController)
     }
 
-    private fun updateBottomNavigationVisibility(useNewDashboard: Boolean) {
-        binding.navView.visibility = if (useNewDashboard) View.GONE else View.VISIBLE
-    }
-
-    private fun updateNavHostBottomConstraint(useNewDashboard: Boolean) {
-        ConstraintSet().apply {
-            clone(binding.container)
-            clear(R.id.nav_host_fragment_activity_main, ConstraintSet.BOTTOM)
-            if (useNewDashboard) {
-                connect(
-                    R.id.nav_host_fragment_activity_main,
-                    ConstraintSet.BOTTOM,
-                    ConstraintSet.PARENT_ID,
-                    ConstraintSet.BOTTOM,
-                )
-            } else {
-                connect(
-                    R.id.nav_host_fragment_activity_main,
-                    ConstraintSet.BOTTOM,
-                    R.id.nav_view,
-                    ConstraintSet.TOP,
-                )
-            }
-            setMargin(R.id.nav_host_fragment_activity_main, ConstraintSet.BOTTOM, 0)
-            applyTo(binding.container)
+    private fun updateBottomNavigationVisibility(
+        useNewDashboard: Boolean,
+        navController: NavController,
+    ) {
+        if (useNewDashboard) {
+            binding.navViewContainer.visibility = View.GONE
+            return
         }
+        ensureBottomNavigation(navController)
+        binding.navViewContainer.visibility =
+            if (navController.currentDestination?.id in destinationsWithoutBottomNavigation) {
+                View.GONE
+            } else {
+                View.VISIBLE
+            }
+    }
+
+    private fun ensureBottomNavigation(navController: NavController): BottomNavigationView {
+        bottomNavigationView?.let { return it }
+        val navView = layoutInflater.inflate(
+            R.layout.view_legacy_bottom_navigation,
+            binding.navViewContainer,
+            false,
+        ) as BottomNavigationView
+        binding.navViewContainer.addView(navView)
+        setupBottomNavigation(navView, navController)
+        bottomNavigationView = navView
+        return navView
     }
 
     private fun setupBottomNavigation(
@@ -268,41 +468,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun navigateToPreferredSettingHome(navController: NavController): Boolean {
-        val targetDestinationId = if (appPreference.setting_use_new_home_screen_preference) {
-            R.id.navigation_setting
-        } else {
-            R.id.settingMainFragment
-        }
+        val targetDestinationId = preferredSettingHomeDestination()
         if (navController.currentDestination?.id == targetDestinationId) return false
-        val currentDestinationId = navController.currentDestination?.id
-        val popUpToDestinationId = if (currentDestinationId == R.id.settingMainFragment) {
-            R.id.settingMainFragment
-        } else {
-            R.id.navigation_setting
-        }
-        val inclusive = targetDestinationId == R.id.navigation_setting ||
-            popUpToDestinationId == R.id.settingMainFragment
-        return navigateReplacingCurrentHome(
-            navController = navController,
-            targetDestinationId = targetDestinationId,
-            popUpToDestinationId = popUpToDestinationId,
-            inclusive = inclusive,
-        )
+        // Both home modes are roots. Clear detail/tab history even when the
+        // other home has never been created in this activity.
+        navController.graph.setStartDestination(targetDestinationId)
+        val options = NavOptions.Builder()
+            .setLaunchSingleTop(true)
+            .setPopUpTo(navController.graph.id, false)
+            .build()
+        navController.navigate(targetDestinationId, null, options)
+        return true
     }
 
-    private fun navigateReplacingCurrentHome(
-        navController: NavController,
-        targetDestinationId: Int,
-        popUpToDestinationId: Int,
-        inclusive: Boolean,
-    ): Boolean {
-        return runCatching {
-            val options = NavOptions.Builder()
-                .setLaunchSingleTop(true)
-                .setPopUpTo(popUpToDestinationId, inclusive)
-                .build()
-            navController.navigate(targetDestinationId, null, options)
-            true
-        }.getOrDefault(false)
+    internal companion object {
+        @Volatile
+        internal var initializationGateForTest: (() -> Unit)? = null
+
+        private const val OPEN_SETTING_ACTIVITY_EXTRA = "openSettingActivity"
+        private const val SAVED_STATE_REGISTRY_KEY =
+            "androidx.lifecycle.BundlableSavedStateRegistry.key"
+        private const val FRAGMENT_MANAGER_STATE_KEY = "android:support:fragments"
+        private const val INITIAL_INTENT_HANDLED_KEY = "main.initialIntentHandled"
+        private const val PENDING_INTENT_RECEIVED_KEY =
+            "main.pendingIntentReceivedDuringInitialization"
+        private const val PENDING_INTENT_REQUEST_KEY = "main.pendingIntentRequest"
     }
 }

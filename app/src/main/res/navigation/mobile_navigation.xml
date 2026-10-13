@@ -129,6 +129,11 @@
         android:label="@string/category_common" />
 
     <fragment
+        android:id="@+id/localFontSettingsFragment"
+        android:name="com.kazumaproject.markdownhelperkeyboard.local_font.LocalFontSettingsFragment"
+        android:label="@string/local_font_title" />
+
+    <fragment
         android:id="@+id/legacyCommonPreferenceFragment"
         android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.LegacyCommonPreferenceFragment"
         android:label="@string/category_common" />
@@ -223,7 +228,17 @@
     <fragment
         android:id="@+id/qwertyPreferenceFragment"
         android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.QwertyPreferenceFragment"
-        android:label="QWERTY" />
+        android:label="@string/qwerty_common_category_title" />
+
+    <fragment
+        android:id="@+id/qwertyEnglishPreferenceFragment"
+        android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.QwertyEnglishPreferenceFragment"
+        android:label="@string/qwerty_english_category_title" />
+
+    <fragment
+        android:id="@+id/qwertyRomajiPreferenceFragment"
+        android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.QwertyRomajiPreferenceFragment"
+        android:label="@string/qwerty_romaji_category_title" />
 
     <fragment
         android:id="@+id/sumirePreferenceFragment"
@@ -303,9 +318,6 @@
         android:name="com.kazumaproject.markdownhelperkeyboard.custom_keyboard.ui.KeyboardListFragment"
         android:label="@string/custom_layout_fragment_title">
         <action
-            android:id="@+id/action_select_keyboard_layouts"
-            app:destination="@id/keyboardSelectionFragment" />
-        <action
             android:id="@+id/action_keyboardListFragment_to_keyboardEditorFragment"
             app:destination="@id/keyboardEditorFragment" />
     </fragment>
@@ -362,6 +374,16 @@
         android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.candidate_view_height_setting.CandidateViewHeightSettingFragment"
         android:label="@string/candidate_view_height_setting_fragment_title"
         tools:layout="@layout/fragment_candidate_view_height_setting" />
+    <fragment
+        android:id="@+id/candidateHeightDefaultsFragment"
+        android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.candidate_view_height_setting.CandidateHeightDefaultsFragment"
+        android:label="@string/candidate_default_height_title"
+        tools:layout="@layout/fragment_candidate_height_defaults">
+        <argument
+            android:name="isLandscape"
+            android:defaultValue="false"
+            app:argType="boolean" />
+    </fragment>
     <fragment
         android:id="@+id/keyboardSizeLandscapeFragment"
         android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.keyboard_size_landscape_setting.KeyboardSizeLandscapeFragment"
@@ -444,6 +466,10 @@
         android:id="@+id/keyboardThemeFragment"
         android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.keyboard_theme.KeyboardThemeFragment"
         android:label="@string/keyboardthemefragment" />
+    <fragment
+        android:id="@+id/keyboardSkinSelectionFragment"
+        android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.keyboard_theme.KeyboardSkinSelectionFragment"
+        android:label="@string/keyboard_skin_choose" />
     <fragment
         android:id="@+id/tenKeyCandidateLetterSizeFragment"
         android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.tenkey_letter_size_setting.TenKeyCandidateLetterSizeFragment"
@@ -561,4 +587,7 @@
             app:argType="long" />
     </fragment>
 
+    <fragment android:id="@+id/splitKeyboardPreferenceFragment"
+        android:name="com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.SplitKeyboardPreferenceFragment"
+        android:label="@string/split_keyboard_title" />
 </navigation>

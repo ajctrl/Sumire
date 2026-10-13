@@ -10,7 +10,9 @@ package com.kazumaproject.core.domain.flick
 data class RuntimeGestureSettings(
     val flickSensitivity: Int = DEFAULT_FLICK_SENSITIVITY,
     val flickThresholdShape: FlickThresholdShape = FlickThresholdShape.Radial,
+    val tfbiDiagonalRecognitionMode: TfbiDiagonalRecognitionMode = TfbiDiagonalRecognitionMode.LEGACY,
     val longPressTimeoutMillis: Long = DEFAULT_LONG_PRESS_TIMEOUT_MILLIS,
+    val independentMultiTouchEnabled: Boolean = false,
     val revision: Long = 0L
 ) {
     fun normalized(): RuntimeGestureSettings = copy(
@@ -56,6 +58,8 @@ class MutableRuntimeGestureSettingsSource(
     fun update(
         flickSensitivity: Int = current.flickSensitivity,
         flickThresholdShape: FlickThresholdShape = current.flickThresholdShape,
+        tfbiDiagonalRecognitionMode: TfbiDiagonalRecognitionMode = current.tfbiDiagonalRecognitionMode,
+        independentMultiTouchEnabled: Boolean = current.independentMultiTouchEnabled,
         longPressTimeoutMillis: Long = current.longPressTimeoutMillis
     ): RuntimeGestureSettings {
         val previous = current
@@ -70,7 +74,9 @@ class MutableRuntimeGestureSettingsSource(
         if (
             previous.flickSensitivity == normalizedSensitivity &&
             previous.flickThresholdShape == flickThresholdShape &&
-            previous.longPressTimeoutMillis == normalizedLongPress
+            previous.tfbiDiagonalRecognitionMode == tfbiDiagonalRecognitionMode &&
+            previous.longPressTimeoutMillis == normalizedLongPress &&
+            previous.independentMultiTouchEnabled == independentMultiTouchEnabled
         ) {
             return previous
         }
@@ -78,7 +84,9 @@ class MutableRuntimeGestureSettingsSource(
         return RuntimeGestureSettings(
             flickSensitivity = normalizedSensitivity,
             flickThresholdShape = flickThresholdShape,
+            tfbiDiagonalRecognitionMode = tfbiDiagonalRecognitionMode,
             longPressTimeoutMillis = normalizedLongPress,
+            independentMultiTouchEnabled = independentMultiTouchEnabled,
             revision = previous.revision + 1L
         ).also { current = it }
     }
@@ -113,7 +121,8 @@ data class GestureSessionConfig(
     val flickSensitivity: Int,
     val flickThresholdPx: Float,
     val longPressTimeoutMillis: Long,
-    val flickThresholdShape: FlickThresholdShape = FlickThresholdShape.Radial
+    val flickThresholdShape: FlickThresholdShape = FlickThresholdShape.Radial,
+    val tfbiDiagonalRecognitionMode: TfbiDiagonalRecognitionMode = TfbiDiagonalRecognitionMode.LEGACY
 ) {
     init {
         require(flickThresholdPx > 0f) { "flickThresholdPx must be positive" }

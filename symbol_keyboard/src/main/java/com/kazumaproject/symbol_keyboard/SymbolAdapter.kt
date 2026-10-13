@@ -16,9 +16,20 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textview.MaterialTextView
 import com.kazumaproject.domain.EmojiSkinToneSupport
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
 
 class SymbolAdapter :
     PagingDataAdapter<String, SymbolAdapter.SymbolViewHolder>(DIFF_CALLBACK) {
+
+    private var keyboardFontSnapshot = KeyboardFontApplicator.processSnapshot
+    private var useKeyboardFont = false
+
+    fun setKeyboardFont(snapshot: KeyboardFontSnapshot, useForCurrentMode: Boolean) {
+        keyboardFontSnapshot = snapshot
+        useKeyboardFont = useForCurrentMode
+        notifyDataSetChanged()
+    }
 
     /** シンボル文字列をクリックしたとき */
     private var onItemClickListener: ((String) -> Unit)? = null
@@ -73,7 +84,7 @@ class SymbolAdapter :
      * @param textColor 通常時の文字色
      * @param highlightColor タップ時の波紋(Ripple)の色
      */
-    fun setThemeColors(@ColorInt textColor: Int, @ColorInt highlightColor: Int) {
+    fun setThemeColors(@ColorInt textColor: Int?, @ColorInt highlightColor: Int?) {
         this.themeTextColor = textColor
         this.themeHighlightColor = highlightColor
         // 既存の表示を更新するために再描画を通知
@@ -83,6 +94,7 @@ class SymbolAdapter :
     inner class SymbolViewHolder(itemView: View) :
         RecyclerView.ViewHolder(itemView) {
         val symbolTextView: MaterialTextView = itemView.findViewById(R.id.symbol_text)
+        val originalTextColors = symbolTextView.textColors
         val skinToneIndicator: View = itemView.findViewById(R.id.skin_tone_indicator)
 
         init {
@@ -119,11 +131,14 @@ class SymbolAdapter :
         if (symbol != null) {
             holder.symbolTextView.text = symbol
             holder.symbolTextView.textSize = symbolTextSize
+            KeyboardFontApplicator.apply(
+                holder.symbolTextView,
+                if (useKeyboardFont) keyboardFontSnapshot
+                else keyboardFontSnapshot.copy(typeface = null)
+            )
 
             // ★追加: テキストカラーの適用
-            themeTextColor?.let { color ->
-                holder.symbolTextView.setTextColor(color)
-            }
+            holder.symbolTextView.setTextColor(themeTextColor?.let(android.content.res.ColorStateList::valueOf) ?: holder.originalTextColors)
             holder.skinToneIndicator.visibility =
                 if (showSkinToneIndicators && EmojiSkinToneSupport.hasSkinToneVariants(symbol)) {
                     View.VISIBLE
@@ -141,6 +156,11 @@ class SymbolAdapter :
             )
         } else {
             holder.symbolTextView.text = ""
+            KeyboardFontApplicator.apply(
+                holder.symbolTextView,
+                if (useKeyboardFont) keyboardFontSnapshot
+                else keyboardFontSnapshot.copy(typeface = null)
+            )
             holder.skinToneIndicator.visibility = View.GONE
         }
     }

@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string-array name="ng_word_match_mode_entries">
+        <item>@string/ng_word_match_mode_partial</item>
+        <item>@string/ng_word_match_mode_exact</item>
+    </string-array>
+
     <string-array name="utility_angle_mode_entries">
         <item>@string/utility_angle_degrees</item>
         <item>@string/utility_angle_radians</item>
@@ -36,6 +41,15 @@
     <string-array name="physical_keyboard_input_mode_values">
         <item>romaji</item>
         <item>kana</item>
+    </string-array>
+
+    <string-array name="physical_toolbar_style_entries">
+        <item>@string/physical_toolbar_style_bottom</item>
+        <item>@string/physical_toolbar_style_floating</item>
+    </string-array>
+    <string-array name="physical_toolbar_style_values">
+        <item>bottom</item>
+        <item>floating</item>
     </string-array>
 
     <string-array name="type_null_input_behavior_entries">
@@ -374,5 +388,15 @@
     <string-array name="flick_threshold_shape_values">
         <item>radial</item>
         <item>rectangular</item>
+    </string-array>
+
+    <string-array name="tfbi_diagonal_recognition_mode_entries">
+        <item>@string/tfbi_diagonal_recognition_mode_legacy</item>
+        <item>@string/tfbi_diagonal_recognition_mode_stable</item>
+    </string-array>
+
+    <string-array name="tfbi_diagonal_recognition_mode_values">
+        <item>legacy</item>
+        <item>stable</item>
     </string-array>
 </resources>

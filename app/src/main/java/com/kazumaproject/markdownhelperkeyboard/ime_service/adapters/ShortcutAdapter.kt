@@ -9,6 +9,9 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.kazumaproject.core.domain.extensions.dpToPx
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontGlyphDrawable
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
 import com.kazumaproject.markdownhelperkeyboard.R
 import com.kazumaproject.markdownhelperkeyboard.short_cut.ShortcutType
 
@@ -16,7 +19,7 @@ internal class ShortcutIconColorState {
     var iconColor: Int? = null
         private set
 
-    fun setIconColor(color: Int): Boolean {
+    fun setIconColor(color: Int?): Boolean {
         if (iconColor == color) return false
         iconColor = color
         return true
@@ -32,9 +35,21 @@ class ShortcutAdapter : ListAdapter<ShortcutType, ShortcutAdapter.ViewHolder>(Di
     var onItemClicked: ((ShortcutType) -> Unit)? = null
 
     private val iconColorState = ShortcutIconColorState()
+    private var keyboardFontSnapshot = KeyboardFontApplicator.processSnapshot
     private var activeShortcutTypes: Set<ShortcutType> = emptySet()
     private var toolbarHeightPx: Int = 0
     private var iconSizePx: Int = 0
+    private var floatingPanel = false
+
+    internal fun floatingPanelItemWidth(context: android.content.Context): Int = maxOf(context.dpToPx(48), iconSizePx + context.dpToPx(16))
+
+    internal fun floatingPanelItemHeight(context: android.content.Context): Int = maxOf(context.dpToPx(48), toolbarHeightPx)
+
+    fun setFloatingPanel(value: Boolean) {
+        if (floatingPanel == value) return
+        floatingPanel = value
+        notifyItemRangeChanged(0, itemCount)
+    }
 
     /**
      * ViewHolder now captures clicks and calls the adapter's listener.
@@ -61,8 +76,13 @@ class ShortcutAdapter : ListAdapter<ShortcutType, ShortcutAdapter.ViewHolder>(Di
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = getItem(position)
+        holder.itemView.contentDescription = item.description
         applyShortcutToolbarSize(holder)
-        holder.imageView.setImageResource(item.resolveIconResId()) // Enumからアイコン取得
+        KeyboardFontGlyphDrawable.setImageResource(
+            holder.imageView,
+            item.resolveIconResId(),
+            keyboardFontSnapshot,
+        ) // Enumからアイコン取得
 
         // ★追加: 色が設定されていれば適用し、なければ解除する
         iconColorState.iconColor?.let { color ->
@@ -70,6 +90,12 @@ class ShortcutAdapter : ListAdapter<ShortcutType, ShortcutAdapter.ViewHolder>(Di
         } ?: run {
             holder.imageView.clearColorFilter()
         }
+    }
+
+    fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        if (keyboardFontSnapshot == snapshot) return
+        keyboardFontSnapshot = snapshot
+        if (itemCount > 0) notifyItemRangeChanged(0, itemCount)
     }
 
     fun setShortcutToolbarSize(
@@ -90,7 +116,7 @@ class ShortcutAdapter : ListAdapter<ShortcutType, ShortcutAdapter.ViewHolder>(Di
     }
 
     // ★追加: 外部から色を設定するメソッド
-    fun setIconColor(color: Int) {
+    fun setIconColor(color: Int?) {
         if (!iconColorState.setIconColor(color)) return
         notifyItemRangeChanged(0, itemCount)
     }
@@ -126,8 +152,8 @@ class ShortcutAdapter : ListAdapter<ShortcutType, ShortcutAdapter.ViewHolder>(Di
         val itemWidthPx = maxOf(itemMinWidthPx, iconSizePx + horizontalPaddingPx)
 
         holder.itemView.layoutParams = holder.itemView.layoutParams.apply {
-            width = itemWidthPx
-            height = toolbarHeightPx
+            width = if (floatingPanel) ViewGroup.LayoutParams.MATCH_PARENT else itemWidthPx
+            height = if (floatingPanel) floatingPanelItemHeight(context) else toolbarHeightPx
         }
         holder.imageView.layoutParams = holder.imageView.layoutParams.apply {
             width = iconSizePx
