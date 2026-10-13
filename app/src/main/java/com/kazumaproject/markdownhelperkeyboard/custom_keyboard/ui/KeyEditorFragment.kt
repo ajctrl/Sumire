@@ -43,6 +43,7 @@ import com.kazumaproject.custom_keyboard.data.KeyIconRef
 import com.kazumaproject.custom_keyboard.data.KeyIconResolver
 import com.kazumaproject.custom_keyboard.data.KeyIconType
 import com.kazumaproject.custom_keyboard.data.KeyItem
+import com.kazumaproject.custom_keyboard.data.KeyTextInputBehavior
 import com.kazumaproject.custom_keyboard.data.KeyType
 import com.kazumaproject.custom_keyboard.data.SpecialKeyColorStyle
 import com.kazumaproject.custom_keyboard.data.automaticDoubleTapPolicy
@@ -78,6 +79,7 @@ import kotlin.math.max
 
 private enum class OutputEditMode {
     NORMAL,
+    TOGGLE,
     LONG_PRESS
 }
 
@@ -104,6 +106,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private var currentKeyData: KeyData? = null
 
     private var currentFlickItems = mutableListOf<FlickMappingItem>()
+    private var currentToggleFlickItems = mutableListOf<FlickMappingItem>()
     private var currentLongPressFlickItems = mutableListOf<FlickMappingItem>()
     private var currentTwoStepItems = mutableListOf<TwoStepMappingItem>()
     private var currentTwoStepLongPressItems = mutableListOf<TwoStepMappingItem>()
@@ -113,14 +116,15 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private var currentCircularFlickMaps = mutableListOf<MutableList<CircularFlickMappingItem>>()
     private var currentCircularMapIndex = 0
     private var outputEditMode: OutputEditMode = OutputEditMode.NORMAL
+    private var selectedTextInputBehavior = KeyTextInputBehavior.NORMAL
     private var isUpdatingCharEditText = false
 
     // 現在選択中のセルモード
     private var currentCellMode: CellMode? = null
 
-    private lateinit var keyActionAdapter: ArrayAdapter<String>
+    private lateinit var keyActionOptions: List<SpecialKeyActionOption>
+    private lateinit var specialFlickActionOptions: List<SpecialKeyActionOption>
     private lateinit var customKeyboardTargetAdapter: ArrayAdapter<String>
-    private lateinit var doubleTapActionAdapter: ArrayAdapter<String>
     private lateinit var doubleTapTargetAdapter: ArrayAdapter<String>
     private lateinit var circularFlickAdapter: CircularFlickMappingAdapter
     private lateinit var circularMapAdapter: ArrayAdapter<String>
@@ -185,35 +189,29 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         displayActions = raw.map { DisplayActionUi(it.displayName, it.action, it.iconResId) }
         specialFlickDisplayActions = displayActions
 
-        val actionDisplayNames = displayActions.map { it.displayName }
-        keyActionAdapter = ArrayAdapter(
-            requireContext(),
-            android.R.layout.simple_spinner_dropdown_item,
-            actionDisplayNames
+        keyActionOptions = groupedSpecialKeyActionOptions(displayActions) {
+            getString(it.titleResId)
+        }
+        specialFlickActionOptions = listOf(SpecialKeyActionOption("")) + keyActionOptions
+        binding.keyActionSpinner.setAdapter(
+            SpecialKeyActionDropdownAdapter(requireContext(), keyActionOptions)
         )
-        binding.keyActionSpinner.setAdapter(keyActionAdapter)
 
-        doubleTapActionAdapter = ArrayAdapter(
-            requireContext(),
-            android.R.layout.simple_spinner_dropdown_item,
-            listOf(getString(R.string.double_tap_disabled)) + actionDisplayNames
+        binding.doubleTapActionSpinner.setAdapter(
+            SpecialKeyActionDropdownAdapter(
+                requireContext(),
+                listOf(SpecialKeyActionOption(getString(R.string.double_tap_disabled))) + keyActionOptions
+            )
         )
-        binding.doubleTapActionSpinner.setAdapter(doubleTapActionAdapter)
         binding.doubleTapActionSpinner.setText(
             getString(R.string.double_tap_disabled),
             false
         )
 
         // 特殊フリック用アクションスピナー（セル選択後に表示）
-        val specialActionNames = mutableListOf("").apply {
-            addAll(specialFlickDisplayActions.map { it.displayName })
-        }
-        val specialActionAdapter = ArrayAdapter(
-            requireContext(),
-            android.R.layout.simple_spinner_dropdown_item,
-            specialActionNames
+        binding.specialFlickMappingsRecyclerView.setAdapter(
+            SpecialKeyActionDropdownAdapter(requireContext(), specialFlickActionOptions)
         )
-        binding.specialFlickMappingsRecyclerView.setAdapter(specialActionAdapter)
 
         customKeyboardTargetAdapter = ArrayAdapter(
             requireContext(),
@@ -265,6 +263,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                     val idx = items.indexOfFirst { it.direction == mode.direction }
                     if (idx != -1) items[idx] = items[idx].copy(output = text)
                     binding.flickGridEditorView.updateCellLabel(mode, text)
+                    updateDoneButtonState()
                 }
                 is CellMode.TwoStepFirst -> {
                     val items = currentTwoStepItemsForOutputMode()
@@ -292,11 +291,9 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         binding.specialFlickMappingsRecyclerView.setOnItemClickListener { _, _, idx, _ ->
             val mode = currentCellMode as? CellMode.SpecialFlick ?: return@setOnItemClickListener
             val item = currentSpecialFlickItems.firstOrNull { it.direction == mode.direction }
-            val selectedAction = if (idx == 0) {
-                null
-            } else {
+            val selectedAction = specialFlickActionOptions.getOrNull(idx)?.action?.let {
                 resolveSpecialFlickSelectedAction(
-                    selectedAction = specialFlickDisplayActions[idx - 1].action,
+                    selectedAction = it.action,
                     currentAction = item?.action,
                     selectedTargetStableId = selectedTargetCustomKeyboardStableId,
                     validTargetStableIds = validTargetStableIds()
@@ -378,6 +375,11 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
 
         binding.inputStyleChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+            val isPetal = checkedIds.first() == R.id.chip_petal_flick
+            binding.chipToggleOutput.isEnabled = isPetal
+            if (!isPetal && outputEditMode == OutputEditMode.TOGGLE) {
+                binding.outputModeChipGroup.check(R.id.chip_normal_output)
+            }
             handleInputStyleUi()
             updateDoneButtonState()
         }
@@ -421,10 +423,15 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
 
         binding.outputModeChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
-            outputEditMode = if (checkedIds.first() == R.id.chip_long_press_output) {
-                OutputEditMode.LONG_PRESS
-            } else {
-                OutputEditMode.NORMAL
+            outputEditMode = when (checkedIds.first()) {
+                R.id.chip_toggle_output -> OutputEditMode.TOGGLE
+                R.id.chip_long_press_output -> OutputEditMode.LONG_PRESS
+                else -> OutputEditMode.NORMAL
+            }
+            when (outputEditMode) {
+                OutputEditMode.NORMAL -> selectedTextInputBehavior = KeyTextInputBehavior.NORMAL
+                OutputEditMode.TOGGLE -> selectedTextInputBehavior = KeyTextInputBehavior.TOGGLE
+                OutputEditMode.LONG_PRESS -> Unit
             }
             handleInputStyleUi()
             updateDoneButtonState()
@@ -433,7 +440,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         binding.keyLabelEdittext.doAfterTextChanged { text ->
             updateDoneButtonState()
             // ペタルフリックの中央セルラベルをリアルタイム更新
-            if (binding.inputStyleChipGroup.checkedChipId == R.id.chip_petal_flick && !isLongPressOutputMode()) {
+            if (binding.inputStyleChipGroup.checkedChipId == R.id.chip_petal_flick && outputEditMode == OutputEditMode.NORMAL) {
                 val label = text?.toString() ?: ""
                 val tapOutput = currentFlickItems.firstOrNull { it.direction == FlickDirection.TAP }?.output ?: ""
                 binding.flickGridEditorView.updateCellLabel(
@@ -450,7 +457,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         }
         binding.keyActionSpinner.setOnItemClickListener { _, _, position, _ ->
             if (
-                displayActions.getOrNull(position)?.action == KeyAction.ShiftKey &&
+                keyActionOptions.getOrNull(position)?.action?.action == KeyAction.ShiftKey &&
                 selectedDoubleTapDisplayAction() == null
             ) {
                 displayActionForAction(KeyAction.CapLockKey)?.let { capLock ->
@@ -589,6 +596,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         val isTwoStep = selectedStyle == R.id.chip_two_step_flick
         val isCircular = selectedStyle == R.id.chip_circular_flick
         val isFlickLongPress = selectedStyle == R.id.chip_flick_long_press
+        binding.chipToggleOutput.isEnabled = selectedStyle == R.id.chip_petal_flick
 
         if (binding.outputModeChipGroup.checkedChipId == View.NO_ID) {
             binding.outputModeChipGroup.check(R.id.chip_normal_output)
@@ -637,8 +645,13 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                     FlickMappingItem(direction = direction, output = "")
                 }.toMutableList()
             }
+            if (currentToggleFlickItems.isEmpty()) {
+                currentToggleFlickItems = FlickDirectionMapper.allowedDirections.map { direction ->
+                    FlickMappingItem(direction = direction, output = "")
+                }.toMutableList()
+            }
             val keyLabel = binding.keyLabelEdittext.text.toString()
-            val centerLabel = if (isLongPressOutputMode()) "" else keyLabel
+            val centerLabel = if (outputEditMode == OutputEditMode.NORMAL) keyLabel else ""
             binding.flickGridEditorView.setPetalContent(
                 currentPetalItems().toList(),
                 displayActions,
@@ -728,6 +741,8 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 val value = currentPetalItems().firstOrNull { it.direction == mode.direction }?.output ?: ""
                 binding.textCharInputLayout.hint = if (isLongPressOutputMode()) {
                     "長押し時の出力"
+                } else if (outputEditMode == OutputEditMode.TOGGLE) {
+                    "トグル時の1文字"
                 } else {
                     getString(R.string.two_step_output_label)
                 }
@@ -794,7 +809,11 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 binding.outputModeChipGroup.checkedChipId == R.id.chip_long_press_output
 
     private fun currentPetalItems(): MutableList<FlickMappingItem> =
-        if (isLongPressOutputMode()) currentLongPressFlickItems else currentFlickItems
+        when (outputEditMode) {
+            OutputEditMode.NORMAL -> currentFlickItems
+            OutputEditMode.TOGGLE -> currentToggleFlickItems
+            OutputEditMode.LONG_PRESS -> currentLongPressFlickItems
+        }
 
     private fun currentTwoStepItemsForOutputMode(): MutableList<TwoStepMappingItem> =
         if (isLongPressOutputMode()) currentTwoStepLongPressItems else currentTwoStepItems
@@ -1077,6 +1096,9 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     }
 
     private fun updateDoneButtonState() {
+        if (outputEditMode != OutputEditMode.TOGGLE) {
+            binding.textCharInputLayout.error = null
+        }
         val isEnabled = when (binding.keyTypeChipGroup.checkedChipId) {
             R.id.chip_special -> {
                 val isFlick =
@@ -1125,7 +1147,24 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                             (binding.keyLabelEdittext.text.toString().isNotEmpty() && hasAnyOutput)
                 } else {
                     // Petal: label must be filled
-                    binding.keyLabelEdittext.text.toString().isNotEmpty()
+                    val hasToggleCenter = currentToggleFlickItems.any {
+                        it.direction == FlickDirection.TAP && it.output.isNotEmpty()
+                    }
+                    val toggleOutputsAreValid = selectedTextInputBehavior != KeyTextInputBehavior.TOGGLE ||
+                        (hasToggleCenter &&
+                            currentToggleFlickItems.all {
+                                it.output.isEmpty() || it.output.length == 1
+                            })
+                    binding.textCharInputLayout.error = if (toggleOutputsAreValid) {
+                        null
+                    } else if (!hasToggleCenter &&
+                        selectedTextInputBehavior == KeyTextInputBehavior.TOGGLE
+                    ) {
+                        "中央のトグル出力を設定してください"
+                    } else {
+                        "トグル出力は1文字で設定してください"
+                    }
+                    binding.keyLabelEdittext.text.toString().isNotEmpty() && toggleOutputsAreValid
                 }
             }
 
@@ -1322,7 +1361,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                     binding.keyLabelEdittext.setText(key.label)
 
                     val flickMap = state.layout.flickKeyMaps[key.keyId]?.firstOrNull() ?: emptyMap()
-                    currentFlickItems = FlickDirectionMapper.allowedDirections.map { direction ->
+                    val restoredItems = FlickDirectionMapper.allowedDirections.map { direction ->
                         val savedAction = flickMap[direction]
                         val output = if (savedAction is FlickAction.Input) {
                             savedAction.char
@@ -1333,6 +1372,20 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                         }
                         FlickMappingItem(direction = direction, output = output)
                     }.toMutableList()
+                    val emptyItems = FlickDirectionMapper.allowedDirections.map { direction ->
+                        FlickMappingItem(direction = direction, output = "")
+                    }.toMutableList()
+                    if (key.textInputBehavior == KeyTextInputBehavior.TOGGLE) {
+                        currentToggleFlickItems = restoredItems
+                        currentFlickItems = emptyItems
+                        outputEditMode = OutputEditMode.TOGGLE
+                        selectedTextInputBehavior = KeyTextInputBehavior.TOGGLE
+                        binding.outputModeChipGroup.check(R.id.chip_toggle_output)
+                    } else {
+                        currentFlickItems = restoredItems
+                        currentToggleFlickItems = emptyItems
+                        selectedTextInputBehavior = KeyTextInputBehavior.NORMAL
+                    }
 
                     val longPressFlickMap = state.layout.longPressFlickKeyMaps[key.keyId] ?: emptyMap()
                     currentLongPressFlickItems = FlickDirectionMapper.allowedDirections.map { direction ->
@@ -1724,6 +1777,17 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private fun onDone() {
         val originalKey = currentKeyData ?: return
 
+        if (
+            binding.keyTypeChipGroup.checkedChipId == R.id.chip_normal &&
+            binding.inputStyleChipGroup.checkedChipId == R.id.chip_petal_flick &&
+            selectedTextInputBehavior == KeyTextInputBehavior.TOGGLE &&
+            currentToggleFlickItems.none {
+                it.direction == FlickDirection.TAP && it.output.isNotEmpty()
+            }
+        ) {
+            return
+        }
+
         val newLabel: String
         val newKeyType: KeyType
         val isSpecial: Boolean
@@ -1896,13 +1960,22 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                     )
                 } else if (!isTwoStep) {
                     newLabel = binding.keyLabelEdittext.text.toString()
-                    val tapOutput = currentFlickItems
+                    val activeFlickItems = if (selectedTextInputBehavior == KeyTextInputBehavior.TOGGLE) {
+                        currentToggleFlickItems
+                    } else {
+                        currentFlickItems
+                    }
+                    if (selectedTextInputBehavior == KeyTextInputBehavior.TOGGLE &&
+                        activeFlickItems.any { it.output.isNotEmpty() && it.output.length != 1 }
+                    ) return
+                    val tapOutput = activeFlickItems
                         .firstOrNull { it.direction == FlickDirection.TAP }
                         ?.output
                         .orEmpty()
-                    val nonTapFlickItems = currentFlickItems
+                    val nonTapFlickItems = activeFlickItems
                         .filter { it.direction != FlickDirection.TAP && it.output.isNotEmpty() }
                     newKeyType = if (
+                        selectedTextInputBehavior != KeyTextInputBehavior.TOGGLE &&
                         originalKey.keyType == KeyType.NORMAL &&
                         nonTapFlickItems.isEmpty() &&
                         currentLongPressFlickItems.none { it.output.isNotEmpty() }
@@ -1917,7 +1990,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                     newFlickMap = if (newKeyType == KeyType.NORMAL) {
                         emptyMap()
                     } else {
-                        currentFlickItems
+                        activeFlickItems
                         .filter { it.output.isNotEmpty() }
                         .associate { it.direction to FlickAction.Input(it.output) }
                     }
@@ -2010,7 +2083,16 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             } else {
                 SpecialKeyColorStyle.SPECIAL
             },
-            doubleTapBinding = newDoubleTapBinding
+            doubleTapBinding = newDoubleTapBinding,
+            textInputBehavior = if (
+                !isSpecial &&
+                newKeyType == KeyType.PETAL_FLICK &&
+                selectedTextInputBehavior == KeyTextInputBehavior.TOGGLE
+            ) {
+                KeyTextInputBehavior.TOGGLE
+            } else {
+                KeyTextInputBehavior.NORMAL
+            }
         )
 
         val updated = viewModel.updateKeyAndMappings(

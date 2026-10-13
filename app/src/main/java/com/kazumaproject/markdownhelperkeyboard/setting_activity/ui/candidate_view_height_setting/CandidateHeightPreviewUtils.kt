@@ -29,6 +29,7 @@ import com.kazumaproject.custom_keyboard.data.KeyboardInputMode
 import com.kazumaproject.custom_keyboard.data.KeyboardLayout
 import com.kazumaproject.custom_keyboard.layout.KeyboardDefaultLayouts
 import com.kazumaproject.custom_keyboard.view.FlickKeyboardView
+import com.kazumaproject.custom_keyboard.view.KeyHitTestMode
 import com.kazumaproject.gojuon_keyboard.GojuonKeyboardView
 import com.kazumaproject.markdownhelperkeyboard.ime_service.resolveInitialCustomKeyboardSelection
 import com.kazumaproject.markdownhelperkeyboard.ime_service.state.KeyboardType
@@ -242,7 +243,7 @@ private fun renderNonCustomKeyboardPreviewType(
     views.flick.isVisible = false
 
     when (type) {
-        KeyboardType.TENKEY -> {
+        KeyboardType.TENKEY, KeyboardType.SPLIT -> {
             views.tenKey.isVisible = true
             configureTenKeyPreview(fragment.requireContext(), appPreference, views.tenKey)
         }
@@ -294,7 +295,7 @@ private fun renderNonCustomKeyboardPreviewType(
                     layoutType = layoutType,
                     inputMode = inputMode.name
                 )
-                views.flick.setKeyboard(layout)
+                views.flick.setKeyboard(layout, KeyHitTestMode.NEAREST_KEY)
             }
         }
 
@@ -490,7 +491,10 @@ private fun configureTenKeyPreview(
             textSizeSp = appPreference.tenkey_popup_text_size_sp ?: 28.0f
         )
     )
-    tenKey.setUseThreeStateKeyboard(appPreference.tenkey_use_three_state_keyboard_preference)
+    tenKey.setUseThreeStateKeyboard(
+        appPreference.tenkey_use_three_state_keyboard_preference,
+        appPreference.tenkey_number_symbol_key_gap_preference,
+    )
     tenKey.setUseQwertyNumberWhenThreeStateOff(
         appPreference.tenkey_switch_number_to_qwerty_number_preference
     )

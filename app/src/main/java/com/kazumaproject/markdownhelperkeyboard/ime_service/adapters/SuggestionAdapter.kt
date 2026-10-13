@@ -3,14 +3,17 @@ package com.kazumaproject.markdownhelperkeyboard.ime_service.adapters
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PorterDuff
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.RelativeSizeSpan
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.appcompat.widget.AppCompatImageButton
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -28,9 +31,15 @@ import com.kazumaproject.core.domain.extensions.isAllHalfWidthNumericSymbol
 import com.kazumaproject.core.domain.extensions.isDarkThemeOn
 import com.kazumaproject.core.domain.extensions.setDrawableSolidColor
 import com.kazumaproject.core.domain.state.TenKeyQWERTYMode
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontGlyphDrawable
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
+import com.kazumaproject.markdownhelperkeyboard.setting_activity.AppPreference
 import com.kazumaproject.markdownhelperkeyboard.R
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_ERA
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_CALCULATION
+import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_FORMULA_TEX
+import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_FORMULA_UNICODE
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_LEARNED_DICTIONARY
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_TIME
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_UNIT_CONVERSION
@@ -43,6 +52,7 @@ import com.kazumaproject.markdownhelperkeyboard.custom_keyboard.data.CustomKeybo
 import com.kazumaproject.markdownhelperkeyboard.gemma.GemmaTranslationManager
 import com.kazumaproject.markdownhelperkeyboard.ime_service.CandidateStripLayoutPolicy
 import com.kazumaproject.markdownhelperkeyboard.ime_service.candidate.CandidateStripContent
+import com.kazumaproject.markdownhelperkeyboard.ime_service.candidate.InlineSuggestionToggle
 import com.kazumaproject.markdownhelperkeyboard.ime_service.extensions.correctReading
 import com.kazumaproject.markdownhelperkeyboard.ime_service.extensions.debugPrintCodePoints
 import com.kazumaproject.markdownhelperkeyboard.ime_service.measureDebugSection
@@ -53,6 +63,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import timber.log.Timber
+import java.util.IdentityHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -61,6 +72,8 @@ internal class CandidateItemColorState {
     var backgroundColor: Int? = null
         private set
     var pressedBackgroundColor: Int? = null
+        private set
+    var cornerRadiusDp: Float = 16f
         private set
 
     fun setBackgroundColor(color: Int): Boolean {
@@ -75,17 +88,45 @@ internal class CandidateItemColorState {
         return true
     }
 
-    fun setColors(backgroundColor: Int, pressedBackgroundColor: Int): Boolean {
+    fun setColors(
+        backgroundColor: Int?,
+        pressedBackgroundColor: Int?,
+        cornerRadiusDp: Float = 16f,
+    ): Boolean {
         if (
             this.backgroundColor == backgroundColor &&
-            this.pressedBackgroundColor == pressedBackgroundColor
+            this.pressedBackgroundColor == pressedBackgroundColor &&
+            this.cornerRadiusDp == cornerRadiusDp
         ) {
             return false
         }
         this.backgroundColor = backgroundColor
         this.pressedBackgroundColor = pressedBackgroundColor
+        this.cornerRadiusDp = cornerRadiusDp
         return true
     }
+}
+
+internal fun createCandidateItemBackgroundDrawable(
+    backgroundColor: Int,
+    pressedColor: Int,
+    density: Float,
+    cornerRadiusDp: Float,
+): StateListDrawable = StateListDrawable().apply {
+    addState(
+        intArrayOf(android.R.attr.state_pressed),
+        GradientDrawable().apply {
+            setColor(pressedColor)
+            cornerRadius = cornerRadiusDp * density
+        },
+    )
+    addState(
+        intArrayOf(),
+        GradientDrawable().apply {
+            setColor(backgroundColor)
+            cornerRadius = cornerRadiusDp * density
+        },
+    )
 }
 
 internal data class CandidateYomiPresentation(
@@ -94,11 +135,23 @@ internal data class CandidateYomiPresentation(
     val textSize: Float
 )
 
+/**
+ * Framework-owned inline views shown by the compact candidate strip.
+ *
+ * The list deliberately uses View rather than InlineContentView so this adapter can still be
+ * loaded on Android versions earlier than API 30.
+ */
+internal data class InlineSuggestionStripState(
+    val views: List<View> = emptyList(),
+    val showInlineSuggestions: Boolean = false,
+    val toggle: InlineSuggestionToggle? = null,
+)
+
 internal fun resolveCandidateYomiPresentation(
     showCandidateYomiForLiveConversion: Boolean,
     isFirstCandidate: Boolean,
     suggestion: Candidate,
-    candidateTextSize: Float
+    readingTextSize: Float
 ): CandidateYomiPresentation {
     val yomi = suggestion.yomi
     val shouldShowYomi =
@@ -109,7 +162,7 @@ internal fun resolveCandidateYomiPresentation(
     return CandidateYomiPresentation(
         isVisible = shouldShowYomi,
         text = if (shouldShowYomi) yomi.orEmpty() else "",
-        textSize = candidateTextSize * 0.72f
+        textSize = readingTextSize
     )
 }
 
@@ -117,7 +170,40 @@ class SuggestionAdapter internal constructor(
     private val backgroundDiffExecutor: Executor = diffExecutor
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
+    private var keyboardFontSnapshot = KeyboardFontApplicator.processSnapshot
+
+    fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        if (keyboardFontSnapshot == snapshot) return
+        keyboardFontSnapshot = snapshot
+        notifyDataSetChanged()
+    }
+
+    private fun applyKeyboardFont(holder: RecyclerView.ViewHolder) {
+        when (holder) {
+            is SuggestionViewHolder -> {
+                KeyboardFontApplicator.apply(holder.text, keyboardFontSnapshot)
+                KeyboardFontApplicator.apply(holder.yomiText, keyboardFontSnapshot)
+                KeyboardFontApplicator.apply(holder.typeText, keyboardFontSnapshot)
+            }
+            is SelectionActionViewHolder -> {
+                KeyboardFontApplicator.apply(holder.badgeText, keyboardFontSnapshot)
+                KeyboardFontApplicator.apply(holder.actionText, keyboardFontSnapshot)
+            }
+            is InlineSuggestionToggleViewHolder -> KeyboardFontApplicator.apply(holder.badgeText, keyboardFontSnapshot)
+            is ZeroQueryViewHolder -> KeyboardFontApplicator.apply(holder.text, keyboardFontSnapshot)
+            is ClipboardPreviewViewHolder -> {
+                holder.clipboardPreviewText?.let { KeyboardFontApplicator.apply(it, keyboardFontSnapshot) }
+                holder.clipboardPreviewTextDescription?.let { KeyboardFontApplicator.apply(it, keyboardFontSnapshot) }
+            }
+            is CustomLayoutViewHolder -> KeyboardFontApplicator.apply(holder.nameTextView, keyboardFontSnapshot)
+            // Icon-only shortcuts/actions and framework-owned inline suggestions keep their
+            // icon/framework typography.
+        }
+    }
+
     companion object {
+        private const val FLOATING_VIEW_TYPE_OFFSET = 10000
+        private const val DEFAULT_CANDIDATE_DIVIDER_VERTICAL_MARGIN_DP = 18
         const val VIEW_TYPE_EMPTY = 0
         const val VIEW_TYPE_SUGGESTION = 1
         const val VIEW_TYPE_CUSTOM_LAYOUT_PICKER = 2
@@ -127,6 +213,8 @@ class SuggestionAdapter internal constructor(
         const val VIEW_TYPE_SHORTCUT_ENTRY = 6
         const val VIEW_TYPE_ZERO_QUERY_CLOSE = 7
         const val VIEW_TYPE_ZERO_QUERY_CANDIDATE = 8
+        const val VIEW_TYPE_INLINE_TOGGLE = 9
+        const val VIEW_TYPE_INLINE_SUGGESTION = 10
 
         private val diffThreadIndex = AtomicInteger(0)
         private val diffExecutor: Executor = Executors.newFixedThreadPool(2) { runnable ->
@@ -143,6 +231,8 @@ class SuggestionAdapter internal constructor(
     internal enum class SuggestionDisplayItemKind {
         CandidateItem,
         SelectionActionItem,
+        InlineSuggestionToggleItem,
+        InlineSuggestionItem,
         ZeroQueryCloseItem,
         ZeroQueryCandidateItem,
         QuickActionsItem,
@@ -155,7 +245,8 @@ class SuggestionAdapter internal constructor(
     internal enum class StartAnchorRole {
         QuickActions,
         ShortcutItems,
-        ShortcutEntry
+        ShortcutEntry,
+        InlineSuggestionToggle,
     }
 
     internal data class QuickActionsVisibilitySignature(
@@ -179,6 +270,15 @@ class SuggestionAdapter internal constructor(
         data class SelectionActionItem(
             val candidate: Candidate,
             val candidateIndex: Int,
+        ) : SuggestionDisplayItem()
+
+        data class InlineSuggestionToggleItem(
+            val toggle: InlineSuggestionToggle,
+        ) : SuggestionDisplayItem()
+
+        data class InlineSuggestionItem(
+            val view: View,
+            val index: Int,
         ) : SuggestionDisplayItem()
 
         object ZeroQueryCloseItem : SuggestionDisplayItem()
@@ -244,6 +344,7 @@ class SuggestionAdapter internal constructor(
     private var onCustomLayoutItemClickListener: ((Int) -> Unit)? = null
     private var onShortcutItemClickListener: ((ShortcutType) -> Unit)? = null
     private var onShortcutEntryClickListener: ((View) -> Unit)? = null
+    private var onInlineSuggestionToggleClickListener: (() -> Unit)? = null
     private var onZeroQueryCandidateClickListener: ((Candidate) -> Unit)? = null
     private var onZeroQueryCloseClickListener: (() -> Unit)? = null
     private var onShowSoftKeyboardClick: (() -> Unit)? = null
@@ -268,6 +369,15 @@ class SuggestionAdapter internal constructor(
     private var currentMode: TenKeyQWERTYMode = TenKeyQWERTYMode.Default
     private var customLayouts: List<CustomKeyboardLayout> = emptyList()
 
+    private var inlineSuggestionStripState = InlineSuggestionStripState()
+    private val attachedRecyclerViews = IdentityHashMap<RecyclerView, InlineSuggestionItemDecoration>()
+    private val inlineScrollListeners = IdentityHashMap<RecyclerView, RecyclerView.OnScrollListener>()
+    private val recyclerViewLayoutListeners =
+        IdentityHashMap<RecyclerView, View.OnLayoutChangeListener>()
+    private val originalClipToPadding = IdentityHashMap<RecyclerView, Boolean>()
+    private val originalRecyclerViewPadding = IdentityHashMap<RecyclerView, Rect>()
+    private val inlineViewLayoutListeners = IdentityHashMap<View, View.OnLayoutChangeListener>()
+
     private var showCustomTab: Boolean = true
 
     private var shortcutItems: List<ShortcutType> = emptyList()
@@ -281,6 +391,9 @@ class SuggestionAdapter internal constructor(
 
     private var candidateTextSize: Float = 14f
     private var candidateTextColor: Int? = null
+    private var candidateDividerColor: Int? = null
+    private var candidateDividerVerticalMarginDp: Int? = null
+    private var candidateYomiTextSize: Float = AppPreference.DEFAULT_LIVE_CONVERSION_CANDIDATE_YOMI_SIZE.toFloat()
     private var showCandidateYomiForLiveConversion: Boolean = false
     private var showDictionaryCandidateLabels: Boolean = false
     private val candidateItemColorState = CandidateItemColorState()
@@ -292,6 +405,52 @@ class SuggestionAdapter internal constructor(
     private var committedStartAnchorSignature: StartAnchorSignature? = null
     private var currentContent: CandidateStripContent = CandidateStripContent.Empty
     private var lastSubmittedDisplayItems: List<SuggestionDisplayItem> = emptyList()
+
+    /** Independent split strip: share data and commands, never framework-owned inline Views. */
+    fun mirrorSplitContentFrom(source: SuggestionAdapter) {
+        clipboardText = source.clipboardText
+        clipboardBitmap = source.clipboardBitmap
+        undoText = source.undoText
+        redoText = source.redoText
+        isReconvertEnabled = source.isReconvertEnabled
+        isUndoEnabled = source.isUndoEnabled
+        isRedoEnabled = source.isRedoEnabled
+        isPasteEnabled = source.isPasteEnabled
+        isClipboardDescriptionShow = source.isClipboardDescriptionShow
+        shortcutItems = source.shortcutItems
+        showIntegratedShortcutItems = source.showIntegratedShortcutItems
+        showIntegratedShortcutEntry = source.showIntegratedShortcutEntry
+        integratedShortcutEntryExpanded = source.integratedShortcutEntryExpanded
+        shortcutIconColor = source.shortcutIconColor
+        inlineSuggestionIconBackgroundTint = source.inlineSuggestionIconBackgroundTint
+        activeShortcutTypes = source.activeShortcutTypes
+        incognitoIconDrawable = source.incognitoIconDrawable
+        candidateYomiTextSize = source.candidateYomiTextSize
+        candidateTextSize = source.candidateTextSize
+        candidateTextColor = source.candidateTextColor
+        candidateDividerColor = source.candidateDividerColor
+        candidateDividerVerticalMarginDp = source.candidateDividerVerticalMarginDp
+        showCandidateYomiForLiveConversion = source.showCandidateYomiForLiveConversion
+        showDictionaryCandidateLabels = source.showDictionaryCandidateLabels
+        candidateEmptyDrawableColor = source.candidateEmptyDrawableColor
+        candidateEmptyDrawableTextColor = source.candidateEmptyDrawableTextColor
+        showCustomTab = false
+        candidateItemColorState.setColors(source.candidateItemColorState.backgroundColor,
+            source.candidateItemColorState.pressedBackgroundColor, source.candidateItemColorState.cornerRadiusDp)
+        onItemClickListener = { a, b -> source.onItemClickListener?.invoke(a, b) }
+        onItemLongClickListener = { a, b -> source.onItemLongClickListener?.invoke(a, b) }
+        onItemHelperIconClickListener = { a -> source.onItemHelperIconClickListener?.invoke(a) }
+        onItemHelperIconLongClickListener = { a -> source.onItemHelperIconLongClickListener?.invoke(a) }
+        onShortcutItemClickListener = { a -> source.onShortcutItemClickListener?.invoke(a) }
+        onShortcutEntryClickListener = { a -> source.onShortcutEntryClickListener?.invoke(a) }
+        onZeroQueryCandidateClickListener = { a -> source.onZeroQueryCandidateClickListener?.invoke(a) }
+        onZeroQueryCloseClickListener = { source.onZeroQueryCloseClickListener?.invoke() }
+        onShowSoftKeyboardClick = { source.onShowSoftKeyboardClick?.invoke() }
+        val content = if (source.currentContent is CandidateStripContent.CustomLayoutPicker)
+            CandidateStripContent.Empty else source.currentContent
+        submitContent(content, InlineSuggestionStripState())
+        updateHighlightPosition(source.highlightedPosition)
+    }
 
     fun setOnItemClickListener(onItemClick: (Candidate, Int) -> Unit) {
         this.onItemClickListener = onItemClick
@@ -321,6 +480,10 @@ class SuggestionAdapter internal constructor(
         this.onShortcutEntryClickListener = listener
     }
 
+    fun setOnInlineSuggestionToggleClickListener(listener: () -> Unit) {
+        this.onInlineSuggestionToggleClickListener = listener
+    }
+
     fun setOnZeroQueryCandidateClickListener(listener: (Candidate) -> Unit) {
         this.onZeroQueryCandidateClickListener = listener
     }
@@ -334,6 +497,32 @@ class SuggestionAdapter internal constructor(
     }
 
     fun release() {
+        attachedRecyclerViews.keys.toList().forEach { recyclerView ->
+            detachInlineSuggestionViews(recyclerView)
+            attachedRecyclerViews.remove(recyclerView)?.let(recyclerView::removeItemDecoration)
+            inlineScrollListeners.remove(recyclerView)?.let(recyclerView::removeOnScrollListener)
+            recyclerViewLayoutListeners.remove(recyclerView)?.let {
+                recyclerView.removeOnLayoutChangeListener(it)
+            }
+            originalClipToPadding.remove(recyclerView)?.let {
+                recyclerView.clipToPadding = it
+            }
+            originalRecyclerViewPadding.remove(recyclerView)?.let { padding ->
+                recyclerView.setPadding(padding.left, padding.top, padding.right, padding.bottom)
+            }
+        }
+        attachedRecyclerViews.clear()
+        inlineScrollListeners.clear()
+        recyclerViewLayoutListeners.clear()
+        originalClipToPadding.clear()
+        originalRecyclerViewPadding.clear()
+        inlineSuggestionStripState.views.forEach { view ->
+            inlineViewLayoutListeners.remove(view)?.let(view::removeOnLayoutChangeListener)
+            view.clipBounds = null
+            (view.parent as? ViewGroup)?.removeView(view)
+        }
+        inlineViewLayoutListeners.clear()
+        inlineSuggestionStripState = InlineSuggestionStripState()
         released = true
         onItemClickListener = null
         onItemLongClickListener = null
@@ -342,6 +531,7 @@ class SuggestionAdapter internal constructor(
         onCustomLayoutItemClickListener = null
         onShortcutItemClickListener = null
         onShortcutEntryClickListener = null
+        onInlineSuggestionToggleClickListener = null
         onZeroQueryCandidateClickListener = null
         onZeroQueryCloseClickListener = null
         onShowSoftKeyboardClick = null
@@ -465,7 +655,7 @@ class SuggestionAdapter internal constructor(
         setIntegratedShortcutEntryExpanded(!integratedShortcutEntryExpanded)
     }
 
-    fun setShortcutIconColor(color: Int) {
+    fun setShortcutIconColor(color: Int?) {
         if (shortcutIconColor == color) return
         shortcutIconColor = color
         if (showIntegratedShortcutItems || showIntegratedShortcutEntry) {
@@ -560,6 +750,13 @@ class SuggestionAdapter internal constructor(
                         newItem is SuggestionDisplayItem.ShortcutItem ->
                     oldItem.shortcutType == newItem.shortcutType
 
+                oldItem is SuggestionDisplayItem.InlineSuggestionToggleItem &&
+                        newItem is SuggestionDisplayItem.InlineSuggestionToggleItem -> true
+
+                oldItem is SuggestionDisplayItem.InlineSuggestionItem &&
+                        newItem is SuggestionDisplayItem.InlineSuggestionItem ->
+                    oldItem.view === newItem.view
+
                 oldItem is SuggestionDisplayItem.CustomLayoutItem &&
                         newItem is SuggestionDisplayItem.CustomLayoutItem ->
                     oldItem.layout.stableId == newItem.layout.stableId
@@ -643,12 +840,22 @@ class SuggestionAdapter internal constructor(
     }
 
     fun submitContent(content: CandidateStripContent) {
+        submitContent(content, inlineSuggestionStripState)
+    }
+
+    internal fun submitContent(
+        content: CandidateStripContent,
+        inlineSuggestionState: InlineSuggestionStripState,
+    ) {
         val layoutModeChanged =
             CandidateStripLayoutPolicy.shouldUseLinearHorizontalLayout(currentContent) !=
-                    CandidateStripLayoutPolicy.shouldUseLinearHorizontalLayout(content)
+                    CandidateStripLayoutPolicy.shouldUseLinearHorizontalLayout(content) ||
+                    inlineSuggestionStripState.showInlineSuggestions !=
+                    inlineSuggestionState.showInlineSuggestions
         val nextCandidates = content.candidatesForClicks()
         submitContent(
             content = content,
+            inlineSuggestionState = inlineSuggestionState,
             onCommitted = if (layoutModeChanged || candidateSuggestions != nextCandidates) {
                 { onListUpdated?.invoke() }
             } else {
@@ -659,12 +866,18 @@ class SuggestionAdapter internal constructor(
 
     private fun submitContent(
         content: CandidateStripContent,
+        inlineSuggestionState: InlineSuggestionStripState = this.inlineSuggestionStripState,
         onCommitted: (() -> Unit)?,
     ) {
         traceDebugSection("SuggestionAdapter.submitContent") {
-            if (currentContent == content) return
+            if (
+                currentContent == content &&
+                inlineSuggestionStripState == inlineSuggestionState
+            ) return
             currentContent = content
+            inlineSuggestionStripState = inlineSuggestionState
             candidateSuggestions = content.candidatesForClicks()
+            updateInlineSuggestionRecyclerViews()
             rebuildDisplayItems(onCommitted)
         }
     }
@@ -699,6 +912,12 @@ class SuggestionAdapter internal constructor(
     }
 
     private fun buildDisplayItems(): List<SuggestionDisplayItem> {
+        if (
+            inlineSuggestionStripState.showInlineSuggestions &&
+            inlineSuggestionStripState.views.isNotEmpty()
+        ) {
+            return buildInlineSuggestionItems()
+        }
         return when (val content = currentContent) {
             is CandidateStripContent.Candidates -> buildCandidateItems(content)
             is CandidateStripContent.SelectionActions -> buildSelectionActionItems(content)
@@ -713,10 +932,22 @@ class SuggestionAdapter internal constructor(
         }
     }
 
+    private fun buildInlineSuggestionItems(): List<SuggestionDisplayItem> = buildList {
+        inlineSuggestionStripState.toggle?.let { toggle ->
+            add(SuggestionDisplayItem.InlineSuggestionToggleItem(toggle))
+        }
+        inlineSuggestionStripState.views.forEachIndexed { index, view ->
+            add(SuggestionDisplayItem.InlineSuggestionItem(view, index))
+        }
+    }
+
     private fun buildCandidateItems(
         content: CandidateStripContent.Candidates
     ): List<SuggestionDisplayItem> =
         buildList {
+            content.inlineSuggestionToggle?.let { toggle ->
+                add(SuggestionDisplayItem.InlineSuggestionToggleItem(toggle))
+            }
             content.candidates.forEachIndexed { index, candidate ->
                 add(SuggestionDisplayItem.CandidateItem(candidate, index))
             }
@@ -726,6 +957,9 @@ class SuggestionAdapter internal constructor(
         content: CandidateStripContent.ZeroQuerySuggestions
     ): List<SuggestionDisplayItem> =
         buildList {
+            content.inlineSuggestionToggle?.let { toggle ->
+                add(SuggestionDisplayItem.InlineSuggestionToggleItem(toggle))
+            }
             add(SuggestionDisplayItem.ZeroQueryCloseItem)
             content.candidates.forEachIndexed { index, candidate ->
                 add(SuggestionDisplayItem.ZeroQueryCandidateItem(candidate, index))
@@ -736,6 +970,9 @@ class SuggestionAdapter internal constructor(
         content: CandidateStripContent.SelectionActions
     ): List<SuggestionDisplayItem> =
         buildList {
+            content.inlineSuggestionToggle?.let { toggle ->
+                add(SuggestionDisplayItem.InlineSuggestionToggleItem(toggle))
+            }
             if (content.showShortcutEntry) {
                 add(SuggestionDisplayItem.ShortcutEntryItem)
             }
@@ -746,15 +983,22 @@ class SuggestionAdapter internal constructor(
 
     private fun buildCustomLayoutItems(
         content: CandidateStripContent.CustomLayoutPicker
-    ): List<SuggestionDisplayItem> =
-        content.layouts.mapIndexed { index, layout ->
-            SuggestionDisplayItem.CustomLayoutItem(layout, index)
+    ): List<SuggestionDisplayItem> = buildList {
+        content.inlineSuggestionToggle?.let { toggle ->
+            add(SuggestionDisplayItem.InlineSuggestionToggleItem(toggle))
         }
+        content.layouts.forEachIndexed { index, layout ->
+            add(SuggestionDisplayItem.CustomLayoutItem(layout, index))
+        }
+    }
 
     private fun buildEmptyStateItems(
         content: CandidateStripContent.EmptyState
     ): List<SuggestionDisplayItem> =
         buildList {
+            content.inlineSuggestionToggle?.let { toggle ->
+                add(SuggestionDisplayItem.InlineSuggestionToggleItem(toggle))
+            }
             if (content.showZeroQueryToggle) {
                 add(SuggestionDisplayItem.ZeroQueryCloseItem)
             }
@@ -801,6 +1045,9 @@ class SuggestionAdapter internal constructor(
         content: CandidateStripContent.ExpandedShortcutEntry
     ): List<SuggestionDisplayItem> =
         buildList {
+            content.inlineSuggestionToggle?.let { toggle ->
+                add(SuggestionDisplayItem.InlineSuggestionToggleItem(toggle))
+            }
             add(SuggestionDisplayItem.ShortcutEntryItem)
             content.shortcutItems.forEach { shortcutType ->
                 add(SuggestionDisplayItem.ShortcutItem(shortcutType))
@@ -817,6 +1064,11 @@ class SuggestionAdapter internal constructor(
 
     internal fun buildDisplayItemKindsForTesting(): List<SuggestionDisplayItemKind> {
         return buildDisplayItems().map { it.kind() }
+    }
+
+    internal fun isInlineSuggestionStripShown(): Boolean {
+        return inlineSuggestionStripState.showInlineSuggestions &&
+            inlineSuggestionStripState.views.isNotEmpty()
     }
 
     internal fun buildZeroQueryDisplayTextsForTesting(): List<String> {
@@ -890,6 +1142,12 @@ class SuggestionAdapter internal constructor(
             is SuggestionDisplayItem.SelectionActionItem ->
                 SuggestionDisplayItemKind.SelectionActionItem
 
+            is SuggestionDisplayItem.InlineSuggestionToggleItem ->
+                SuggestionDisplayItemKind.InlineSuggestionToggleItem
+
+            is SuggestionDisplayItem.InlineSuggestionItem ->
+                SuggestionDisplayItemKind.InlineSuggestionItem
+
             SuggestionDisplayItem.ZeroQueryCloseItem ->
                 SuggestionDisplayItemKind.ZeroQueryCloseItem
 
@@ -935,11 +1193,15 @@ class SuggestionAdapter internal constructor(
             is SuggestionDisplayItem.ShortcutItem ->
                 StartAnchorSignature(role = StartAnchorRole.ShortcutItems)
 
+            is SuggestionDisplayItem.InlineSuggestionToggleItem ->
+                StartAnchorSignature(role = StartAnchorRole.InlineSuggestionToggle)
+
             else -> null
         }
     }
 
     inner class SuggestionViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val formulaView: FormulaView = itemView.findViewById(R.id.suggestion_item_formula_view)
         val text: MaterialTextView = itemView.findViewById(R.id.suggestion_item_text_view)
         val yomiText: MaterialTextView = itemView.findViewById(R.id.suggestion_item_yomi_text_view)
         val typeText: MaterialTextView = itemView.findViewById(R.id.suggestion_item_type_text_view)
@@ -948,6 +1210,18 @@ class SuggestionAdapter internal constructor(
     inner class SelectionActionViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val badgeText: MaterialTextView = itemView.findViewById(R.id.suggestion_gemma_action_badge)
         val actionText: MaterialTextView = itemView.findViewById(R.id.suggestion_gemma_action_text)
+    }
+
+    inner class InlineSuggestionToggleViewHolder(itemView: View) :
+        RecyclerView.ViewHolder(itemView) {
+        val badgeText: MaterialTextView =
+            itemView.findViewById(R.id.suggestion_inline_toggle_badge)
+        val badgeIcon: ImageView = itemView.findViewById(R.id.suggestion_inline_toggle_icon)
+    }
+
+    inner class InlineSuggestionViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val container: FrameLayout = itemView as FrameLayout
+        var inlineView: View? = null
     }
 
     inner class ZeroQueryViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -989,8 +1263,21 @@ class SuggestionAdapter internal constructor(
         val imageView: ImageView = itemView.findViewById(R.id.shortcut_entry_image)
     }
 
+    private var floatingPanelColors: com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.CandidatePanelColors? = null
+    internal fun setFloatingPanelColors(colors: com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.CandidatePanelColors) {
+        if (floatingPanelColors == colors) return
+        floatingPanelColors = colors
+        if (floatingPanelWidth > 0) notifyDataSetChanged()
+    }
+    private var floatingPanelWidth = 0
+    fun setFloatingPanelWidth(width: Int) {
+        if (floatingPanelWidth == width) return
+        floatingPanelWidth = width
+        notifyDataSetChanged()
+    }
+
     override fun getItemViewType(position: Int): Int {
-        return viewTypeFor(displayItems[position])
+        return viewTypeFor(displayItems[position]) + if (floatingPanelWidth > 0) FLOATING_VIEW_TYPE_OFFSET else 0
     }
 
     private fun viewTypeFor(item: SuggestionDisplayItem): Int {
@@ -999,6 +1286,8 @@ class SuggestionAdapter internal constructor(
             SuggestionDisplayItem.ZeroQueryCloseItem -> VIEW_TYPE_ZERO_QUERY_CLOSE
             is SuggestionDisplayItem.ZeroQueryCandidateItem -> VIEW_TYPE_ZERO_QUERY_CANDIDATE
             is SuggestionDisplayItem.SelectionActionItem -> VIEW_TYPE_SELECTION_ACTION
+            is SuggestionDisplayItem.InlineSuggestionToggleItem -> VIEW_TYPE_INLINE_TOGGLE
+            is SuggestionDisplayItem.InlineSuggestionItem -> VIEW_TYPE_INLINE_SUGGESTION
             is SuggestionDisplayItem.QuickActionsItem -> VIEW_TYPE_EMPTY
             is SuggestionDisplayItem.ClipboardPreviewItem -> VIEW_TYPE_CLIPBOARD_PREVIEW
             SuggestionDisplayItem.ShortcutEntryItem -> VIEW_TYPE_SHORTCUT_ENTRY
@@ -1011,9 +1300,31 @@ class SuggestionAdapter internal constructor(
         return displayItems.size
     }
 
+    // Preserve XML ColorStateLists so returning from a skin restores each role, including
+    // badge and secondary text colors, rather than substituting one hard-coded color.
+    private val originalTextColors = java.util.WeakHashMap<android.widget.TextView, android.content.res.ColorStateList>()
+    private val originalImageTints = java.util.WeakHashMap<ImageView, android.content.res.ColorStateList?>()
+
+    private fun visitAppearanceViews(view: View, capture: Boolean) {
+        if (view is android.widget.TextView) {
+            if (capture) originalTextColors[view] = view.textColors
+            else originalTextColors[view]?.let(view::setTextColor)
+        }
+        if (view is ImageView) {
+            if (capture) originalImageTints[view] = view.imageTintList
+            else if (originalImageTints.containsKey(view) && view.imageTintList != originalImageTints[view]) {
+                // Setting null on an already-untinted ImageView clears a vector's own XML tint.
+                view.imageTintList = originalImageTints[view]
+            }
+        }
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) visitAppearanceViews(view.getChildAt(index), capture)
+        }
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val isDynamicColorEnable = DynamicColors.isDynamicColorAvailable()
-        return when (viewType) {
+        return when (viewType % FLOATING_VIEW_TYPE_OFFSET) {
             VIEW_TYPE_EMPTY -> {
                 val emptyView = LayoutInflater.from(parent.context)
                     .inflate(R.layout.suggestion_quick_actions_item, parent, false)
@@ -1060,6 +1371,26 @@ class SuggestionAdapter internal constructor(
                 SelectionActionViewHolder(itemView)
             }
 
+            VIEW_TYPE_INLINE_TOGGLE -> {
+                val itemView = LayoutInflater.from(parent.context)
+                    .inflate(R.layout.suggestion_inline_toggle_item, parent, false)
+                InlineSuggestionToggleViewHolder(itemView)
+            }
+
+            VIEW_TYPE_INLINE_SUGGESTION -> {
+                val density = parent.resources.displayMetrics.density
+                val itemView = FrameLayout(parent.context).apply {
+                    layoutParams = RecyclerView.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        (58 * density).toInt(),
+                    )
+                    clipChildren = true
+                    clipToPadding = true
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }
+                InlineSuggestionViewHolder(itemView)
+            }
+
             VIEW_TYPE_SHORTCUT -> {
                 val itemView = LayoutInflater.from(parent.context)
                     .inflate(R.layout.item_shortcut, parent, false)
@@ -1073,12 +1404,16 @@ class SuggestionAdapter internal constructor(
             }
 
             else -> throw IllegalArgumentException("Unknown view type: $viewType")
-        }
+    }.also {
+        visitAppearanceViews(it.itemView, capture = true)
+        applyKeyboardFont(it)
+    }
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val item = displayItems.getOrNull(position) ?: return
-        when (getItemViewType(position)) {
+        if (candidateTextColor == null) visitAppearanceViews(holder.itemView, capture = false)
+        when (getItemViewType(position) % FLOATING_VIEW_TYPE_OFFSET) {
             VIEW_TYPE_EMPTY -> onBindQuickActionsViewHolder(
                 holder as QuickActionsViewHolder,
                 (item as SuggestionDisplayItem.QuickActionsItem).state,
@@ -1097,9 +1432,9 @@ class SuggestionAdapter internal constructor(
                         item,
                     )
 
-                    else -> Unit
-                }
-            }
+            else -> Unit
+        }
+    }
 
             VIEW_TYPE_ZERO_QUERY_CLOSE -> onBindZeroQueryCloseViewHolder(
                 holder as ZeroQueryViewHolder,
@@ -1110,9 +1445,21 @@ class SuggestionAdapter internal constructor(
                 item as SuggestionDisplayItem.ZeroQueryCandidateItem,
             )
 
-            VIEW_TYPE_SELECTION_ACTION -> onBindSelectionActionViewHolder(
-                holder as SelectionActionViewHolder,
-                item as SuggestionDisplayItem.SelectionActionItem,
+            VIEW_TYPE_SELECTION_ACTION -> {
+                onBindSelectionActionViewHolder(
+                    holder as SelectionActionViewHolder,
+                    item as SuggestionDisplayItem.SelectionActionItem,
+                )
+            }
+
+            VIEW_TYPE_INLINE_TOGGLE -> onBindInlineSuggestionToggleViewHolder(
+                holder as InlineSuggestionToggleViewHolder,
+                item as SuggestionDisplayItem.InlineSuggestionToggleItem,
+            )
+
+            VIEW_TYPE_INLINE_SUGGESTION -> onBindInlineSuggestionViewHolder(
+                holder as InlineSuggestionViewHolder,
+                item as SuggestionDisplayItem.InlineSuggestionItem,
             )
 
             VIEW_TYPE_SHORTCUT -> onBindShortcutViewHolder(
@@ -1128,6 +1475,242 @@ class SuggestionAdapter internal constructor(
                 holder as CustomLayoutViewHolder,
                 item as SuggestionDisplayItem.CustomLayoutItem,
             )
+        }
+        applyKeyboardFont(holder)
+        styleFloatingItem(holder, position)
+    }
+
+    private fun styleFloatingItem(holder: RecyclerView.ViewHolder, position: Int) {
+        if (floatingPanelWidth <= 0 || holder is InlineSuggestionViewHolder) return
+        val root = holder.itemView
+        val density = root.resources.displayMetrics.density
+        fun dp(value: Int) = (value * density).toInt()
+        val colors = floatingPanelColors ?: com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.CandidatePanelColors.resolve(root.context)
+        val ink = colors.text
+        if (holder is ShortcutViewHolder || holder is ShortcutEntryViewHolder) {
+            if (colors.cupertinoClassic) {
+                root.background = android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(androidx.core.graphics.ColorUtils.setAlphaComponent(colors.pressed, 100)),
+                    null,
+                    android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT),
+                )
+                return
+            }
+            root.background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(androidx.core.graphics.ColorUtils.setAlphaComponent(colors.pressed, 100)),
+                null, GradientDrawable().apply { cornerRadius = dp(10).toFloat(); setColor(android.graphics.Color.WHITE) })
+            return
+        }
+        if (holder is QuickActionsViewHolder) {
+            // Status icons and individually styled actions are not candidate chips.
+            root.background = null
+            return
+        }
+        val selected = position == 0 && (holder is SuggestionViewHolder || holder is ZeroQueryViewHolder)
+        val candidateText = when (holder) {
+            is SuggestionViewHolder -> holder.text
+            is ZeroQueryViewHolder -> holder.text
+            else -> null
+        }
+        if (candidateText != null) {
+            root.minimumHeight = dp(44)
+            root.setPadding(dp(12), dp(8), dp(12), dp(8))
+            root.layoutParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            candidateText.text = candidateText.text.trim()
+            candidateText.maxLines = Int.MAX_VALUE
+            candidateText.maxWidth = (floatingPanelWidth - dp(64)).coerceAtLeast(dp(40))
+            candidateText.textSize = candidateTextSize.coerceAtLeast(18f)
+            candidateText.setTextColor(if (selected) colors.selectionText else ink)
+            if (holder is SuggestionViewHolder) {
+                holder.typeText.setTextColor(if (selected) colors.selectionText else ink)
+                holder.yomiText.setTextColor(if (selected) colors.selectionText else ink)
+                holder.formulaView.setFormulaTextColor(if (selected) colors.selectionText else ink)
+            }
+            root.findViewById<View>(R.id.candidate_divider)?.apply {
+                visibility = if (colors.cupertinoClassic) View.VISIBLE else View.GONE
+                if (colors.cupertinoClassic) setBackgroundColor(
+                    com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.CupertinoClassicCandidateChrome.dividerColor
+                )
+            }
+        }
+        val chip = GradientDrawable().apply {
+            cornerRadius = if (colors.cupertinoClassic) 0f else dp(10).toFloat()
+            setColor(if (selected) colors.selection else colors.candidate)
+            if (!colors.cupertinoClassic) setStroke(dp(1), androidx.core.graphics.ColorUtils.setAlphaComponent(ink, 24))
+        }
+        root.background = android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(androidx.core.graphics.ColorUtils.setAlphaComponent(colors.pressed, 100)), chip, null)
+    }
+
+    override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
+        super.onViewAttachedToWindow(holder)
+        if (holder is InlineSuggestionViewHolder) {
+            holder.inlineView?.post { updateInlineSuggestionClipBounds(holder) }
+        }
+    }
+
+    override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
+        if (holder is InlineSuggestionViewHolder) {
+            holder.inlineView
+                ?.takeIf { it.parent === holder.container }
+                ?.clipBounds = null
+        }
+        super.onViewDetachedFromWindow(holder)
+    }
+
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        if (holder is InlineSuggestionViewHolder) {
+            detachInlineSuggestionView(holder)
+        }
+        super.onViewRecycled(holder)
+    }
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        attachedRecyclerViews[recyclerView] = InlineSuggestionItemDecoration(
+            edgeSpacing = (4 * recyclerView.resources.displayMetrics.density).toInt(),
+            itemSpacing = (4 * recyclerView.resources.displayMetrics.density).toInt(),
+        )
+        inlineScrollListeners[recyclerView] = object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                updateInlineSuggestionClipBounds(recyclerView)
+            }
+        }.also(recyclerView::addOnScrollListener)
+        originalClipToPadding[recyclerView] = recyclerView.clipToPadding
+        originalRecyclerViewPadding[recyclerView] = Rect(
+            recyclerView.paddingLeft,
+            recyclerView.paddingTop,
+            recyclerView.paddingRight,
+            recyclerView.paddingBottom,
+        )
+        val layoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            updateInlineSuggestionClipBounds(recyclerView)
+        }
+        recyclerViewLayoutListeners[recyclerView] = layoutListener
+        recyclerView.addOnLayoutChangeListener(layoutListener)
+        updateInlineSuggestionRecyclerViews()
+    }
+
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
+        detachInlineSuggestionViews(recyclerView)
+        attachedRecyclerViews.remove(recyclerView)?.let(recyclerView::removeItemDecoration)
+        inlineScrollListeners.remove(recyclerView)?.let(recyclerView::removeOnScrollListener)
+        recyclerViewLayoutListeners.remove(recyclerView)?.let {
+            recyclerView.removeOnLayoutChangeListener(it)
+        }
+        originalClipToPadding.remove(recyclerView)?.let { recyclerView.clipToPadding = it }
+        originalRecyclerViewPadding.remove(recyclerView)?.let { padding ->
+            recyclerView.setPadding(padding.left, padding.top, padding.right, padding.bottom)
+        }
+        super.onDetachedFromRecyclerView(recyclerView)
+    }
+
+    private fun updateInlineSuggestionRecyclerViews() {
+        val showInline =
+            inlineSuggestionStripState.showInlineSuggestions &&
+                inlineSuggestionStripState.views.isNotEmpty()
+        attachedRecyclerViews.forEach { (recyclerView, decoration) ->
+            recyclerView.removeItemDecoration(decoration)
+            if (showInline) {
+                recyclerView.addItemDecoration(decoration)
+                recyclerView.setPadding(0, 0, 0, 0)
+                recyclerView.clipToPadding = true
+                recyclerView.post { updateInlineSuggestionClipBounds(recyclerView) }
+            } else {
+                originalRecyclerViewPadding[recyclerView]?.let { padding ->
+                    recyclerView.setPadding(
+                        padding.left,
+                        padding.top,
+                        padding.right,
+                        padding.bottom,
+                    )
+                }
+                recyclerView.clipToPadding = originalClipToPadding[recyclerView] ?: false
+            }
+        }
+    }
+
+    private fun onBindInlineSuggestionViewHolder(
+        holder: InlineSuggestionViewHolder,
+        item: SuggestionDisplayItem.InlineSuggestionItem,
+    ) {
+        detachInlineSuggestionView(holder)
+        val view = item.view
+        inlineViewLayoutListeners.remove(view)?.let(view::removeOnLayoutChangeListener)
+        (view.parent as? ViewGroup)?.removeView(view)
+        val width = view.layoutParams?.width?.takeIf { it > 0 }
+            ?: ViewGroup.LayoutParams.WRAP_CONTENT
+        val height = view.layoutParams?.height?.takeIf { it > 0 }
+            ?: ViewGroup.LayoutParams.WRAP_CONTENT
+        holder.container.addView(
+            view,
+            FrameLayout.LayoutParams(width, height).apply {
+                gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            }
+        )
+        holder.inlineView = view
+        val layoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            holder.itemView.post { updateInlineSuggestionClipBounds(holder) }
+        }
+        inlineViewLayoutListeners[view] = layoutListener
+        view.addOnLayoutChangeListener(layoutListener)
+        holder.itemView.contentDescription = null
+        view.clipBounds = null
+        holder.itemView.post { updateInlineSuggestionClipBounds(holder) }
+    }
+
+    private fun detachInlineSuggestionViews(recyclerView: RecyclerView) {
+        for (index in 0 until recyclerView.childCount) {
+            val holder = recyclerView.getChildViewHolder(recyclerView.getChildAt(index))
+            if (holder is InlineSuggestionViewHolder) {
+                detachInlineSuggestionView(holder)
+            }
+        }
+    }
+
+    private fun detachInlineSuggestionView(holder: InlineSuggestionViewHolder) {
+        holder.inlineView?.let { view ->
+            if (view.parent === holder.container) {
+                inlineViewLayoutListeners.remove(view)?.let(view::removeOnLayoutChangeListener)
+                view.clipBounds = null
+            }
+        }
+        holder.container.removeAllViews()
+        holder.inlineView = null
+    }
+
+    private fun updateInlineSuggestionClipBounds(holder: InlineSuggestionViewHolder) {
+        val view = holder.inlineView ?: return
+        if (view.parent !== holder.container) return
+        val recyclerView = holder.itemView.parent as? RecyclerView ?: return
+        val recyclerLocation = IntArray(2)
+        val viewLocation = IntArray(2)
+        recyclerView.getLocationInWindow(recyclerLocation)
+        view.getLocationInWindow(viewLocation)
+
+        val viewportLeft = recyclerLocation[0] + recyclerView.paddingLeft
+        val viewportTop = recyclerLocation[1] + recyclerView.paddingTop
+        val viewportRight = recyclerLocation[0] + recyclerView.width - recyclerView.paddingRight
+        val viewportBottom = recyclerLocation[1] + recyclerView.height - recyclerView.paddingBottom
+        val clip = Rect(
+            (viewportLeft - viewLocation[0]).coerceAtLeast(0),
+            (viewportTop - viewLocation[1]).coerceAtLeast(0),
+            (viewportRight - viewLocation[0]).coerceAtMost(view.width),
+            (viewportBottom - viewLocation[1]).coerceAtMost(view.height),
+        )
+        if (clip.left >= clip.right || clip.top >= clip.bottom) {
+            view.clipBounds = Rect(0, 0, 0, 0)
+        } else {
+            view.clipBounds = clip
+        }
+    }
+
+    private fun updateInlineSuggestionClipBounds(recyclerView: RecyclerView) {
+        for (index in 0 until recyclerView.childCount) {
+            val child = recyclerView.getChildAt(index)
+            (recyclerView.getChildViewHolder(child) as? InlineSuggestionViewHolder)?.let {
+                updateInlineSuggestionClipBounds(it)
+            }
         }
     }
 
@@ -1145,6 +1728,7 @@ class SuggestionAdapter internal constructor(
                     visibility = View.GONE
                 }
             }
+            applyEmptyHelperIconColor(incognitoIcon)
 
             undoIcon?.apply {
                 isVisible = state.undoEnabled
@@ -1326,6 +1910,10 @@ class SuggestionAdapter internal constructor(
     ) {
         applyEmptyHelperButtonBackground(parent, isDynamicColorEnable)
         applyEmptyHelperTextColor(text)
+        applyEmptyHelperIconColor(icon)
+    }
+
+    private fun applyEmptyHelperIconColor(icon: ImageView?) {
         candidateEmptyDrawableTextColor?.let { color ->
             icon?.setColorFilter(color, PorterDuff.Mode.SRC_IN)
         } ?: icon?.clearColorFilter()
@@ -1371,7 +1959,11 @@ class SuggestionAdapter internal constructor(
     ) {
         val shortcutType = item.shortcutType
         holder.imageView.apply {
-            setImageResource(shortcutType.resolveShortcutIconResId())
+            KeyboardFontGlyphDrawable.setImageResource(
+                this,
+                shortcutType.resolveShortcutIconResId(),
+                keyboardFontSnapshot,
+            )
             contentDescription = shortcutType.description
             shortcutIconColor?.let { color ->
                 setColorFilter(color, PorterDuff.Mode.SRC_IN)
@@ -1429,6 +2021,12 @@ class SuggestionAdapter internal constructor(
         notifyItemRangeChanged(0, itemCount)
     }
 
+    fun setCandidateYomiTextSize(size: Float) {
+        if (candidateYomiTextSize == size) return
+        candidateYomiTextSize = size
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     fun setShowCandidateYomiForLiveConversion(enabled: Boolean) {
         if (showCandidateYomiForLiveConversion == enabled) return
         showCandidateYomiForLiveConversion = enabled
@@ -1441,7 +2039,7 @@ class SuggestionAdapter internal constructor(
         notifyItemRangeChanged(0, itemCount)
     }
 
-    fun setCandidateTextColor(color: Int) {
+    fun setCandidateTextColor(color: Int?) {
         if (candidateTextColor == color) return
         candidateTextColor = color
         // 全アイテムを更新して色を反映させる
@@ -1458,8 +2056,15 @@ class SuggestionAdapter internal constructor(
         notifyItemRangeChanged(0, itemCount)
     }
 
-    fun setCandidateItemColors(backgroundColor: Int, pressedColor: Int) {
-        if (!candidateItemColorState.setColors(backgroundColor, pressedColor)) return
+    fun setCandidateItemColors(backgroundColor: Int?, pressedColor: Int?, cornerRadiusDp: Float = 16f) {
+        if (!candidateItemColorState.setColors(backgroundColor, pressedColor, cornerRadiusDp)) return
+        notifyItemRangeChanged(0, itemCount)
+    }
+
+    fun setCandidateDividerColor(color: Int?, verticalMarginDp: Int? = null) {
+        if (candidateDividerColor == color && candidateDividerVerticalMarginDp == verticalMarginDp) return
+        candidateDividerColor = color
+        candidateDividerVerticalMarginDp = verticalMarginDp
         notifyItemRangeChanged(0, itemCount)
     }
 
@@ -1503,7 +2108,9 @@ class SuggestionAdapter internal constructor(
         applyCandidateItemBackground(holder.itemView)
         val suggestion = item.candidate
         val position = item.candidateIndex
-        val paddingLength = when {
+        val formulaPresentation = suggestion.presentation
+        val isFormula = formulaPresentation != null
+        val paddingLength = if (floatingPanelWidth > 0) 0 else when {
             position == 0 -> 4
             suggestion.string.length == 1 -> 4
             suggestion.string.length == 2 -> 2
@@ -1520,22 +2127,24 @@ class SuggestionAdapter internal constructor(
             suggestion.string.padStart(suggestion.string.length + paddingLength)
                 .plus(" ".repeat(paddingLength))
         }
+        holder.formulaView.isVisible = isFormula
+        holder.formulaView.setPresentation(formulaPresentation)
+        holder.formulaView.setFormulaTextSizeSp(candidateTextSize)
+        holder.text.isVisible = !isFormula
 
         holder.text.textSize = candidateTextSize
         val yomiPresentation = resolveCandidateYomiPresentation(
             showCandidateYomiForLiveConversion = showCandidateYomiForLiveConversion,
             isFirstCandidate = position == 0,
             suggestion = suggestion,
-            candidateTextSize = candidateTextSize
+            readingTextSize = candidateYomiTextSize
         )
-        holder.yomiText.isVisible = yomiPresentation.isVisible
+        holder.yomiText.isVisible = yomiPresentation.isVisible && !isFormula
         holder.yomiText.text = yomiPresentation.text
-        holder.yomiText.textSize = yomiPresentation.textSize
-        holder.yomiText.translationX = if (yomiPresentation.isVisible) {
-            holder.text.paint.measureText(" ".repeat(paddingLength))
-        } else {
-            0f
-        }
+        holder.yomiText.textSize = if (yomiPresentation.isVisible) {
+            CandidateReadingSizeLimits.clamp(
+                holder.itemView.context, yomiPresentation.textSize)
+        } else yomiPresentation.textSize
 
         candidateTextColor?.let { color ->
             holder.text.setTextColor(color)
@@ -1543,6 +2152,9 @@ class SuggestionAdapter internal constructor(
             holder.typeText.setTextColor(color)
             holder.yomiText.setTextColor(color)
         }
+        holder.formulaView.setFormulaTextColor(
+            candidateTextColor ?: holder.text.currentTextColor
+        )
 
         holder.typeText.text = when (suggestion.type) {
             (1).toByte() -> ""
@@ -1614,6 +2226,10 @@ class SuggestionAdapter internal constructor(
                 holder.itemView.context.getString(R.string.candidate_badge_calculation)
             CANDIDATE_TYPE_UNIT_CONVERSION ->
                 holder.itemView.context.getString(R.string.candidate_badge_unit_conversion)
+            CANDIDATE_TYPE_FORMULA_UNICODE ->
+                holder.itemView.context.getString(R.string.candidate_badge_formula_unicode)
+            CANDIDATE_TYPE_FORMULA_TEX ->
+                holder.itemView.context.getString(R.string.candidate_badge_formula_tex)
             CANDIDATE_TYPE_USER_TEMPLATE ->
                 if (showDictionaryCandidateLabels) "[定型]" else ""
             CANDIDATE_TYPE_TEXT_MACRO -> "[マクロ]"
@@ -1694,7 +2310,7 @@ class SuggestionAdapter internal constructor(
         suggestion: Candidate,
         position: Int,
     ): CharSequence {
-        val paddingLength = when {
+        val paddingLength = if (floatingPanelWidth > 0) 0 else when {
             position == 0 -> 4
             suggestion.string.length == 1 -> 4
             suggestion.string.length == 2 -> 2
@@ -1718,6 +2334,8 @@ class SuggestionAdapter internal constructor(
         applyCandidateItemBackground(holder.itemView)
         val suggestion = item.candidate
         val position = item.candidateIndex
+        holder.actionText.visibility = View.VISIBLE
+        holder.itemView.contentDescription = null
         holder.actionText.text = suggestion.string
         holder.actionText.textSize = candidateTextSize
         holder.badgeText.text = when (suggestion.type) {
@@ -1741,6 +2359,43 @@ class SuggestionAdapter internal constructor(
         }
     }
 
+    private var inlineSuggestionIconBackgroundTint: android.content.res.ColorStateList? = null
+
+    internal fun setInlineSuggestionIconBackgroundTint(tint: android.content.res.ColorStateList?) {
+        if (inlineSuggestionIconBackgroundTint == tint) return
+        inlineSuggestionIconBackgroundTint = tint
+        notifyItemRangeChanged(0, itemCount)
+    }
+
+    private fun onBindInlineSuggestionToggleViewHolder(
+        holder: InlineSuggestionToggleViewHolder,
+        item: SuggestionDisplayItem.InlineSuggestionToggleItem,
+    ) {
+        applyCandidateItemBackground(holder.itemView)
+        holder.badgeText.text = item.toggle.badge.orEmpty()
+        holder.badgeText.isVisible = !item.toggle.badge.isNullOrEmpty()
+        holder.badgeIcon.isVisible = item.toggle.iconResId != null
+        holder.badgeIcon.backgroundTintList = inlineSuggestionIconBackgroundTint
+        holder.badgeIcon.background = item.toggle.iconBackgroundResId?.let { backgroundResId ->
+            ContextCompat.getDrawable(holder.itemView.context, backgroundResId)
+        }
+        // Reload even when the resource is unchanged: clearing ImageView tint on reuse
+        // also clears the vector's XML tint, which setImageResource would otherwise retain.
+        holder.badgeIcon.setImageDrawable(item.toggle.iconResId?.let { iconResId ->
+            ContextCompat.getDrawable(holder.itemView.context, iconResId)?.mutate()
+        })
+        holder.itemView.contentDescription = item.toggle.contentDescription
+        candidateTextColor?.let { color ->
+            holder.badgeText.setTextColor(color)
+            holder.badgeIcon.imageTintList = android.content.res.ColorStateList.valueOf(color)
+        }
+        holder.itemView.isPressed = false
+        holder.itemView.setOnClickListener {
+            onInlineSuggestionToggleClickListener?.invoke()
+        }
+        holder.itemView.setOnLongClickListener { true }
+    }
+
     private fun onBindCustomLayoutViewHolder(
         holder: CustomLayoutViewHolder,
         item: SuggestionDisplayItem.CustomLayoutItem,
@@ -1754,30 +2409,39 @@ class SuggestionAdapter internal constructor(
     private fun applyCandidateItemBackground(itemView: View) {
         val backgroundColor = candidateItemColorState.backgroundColor
         val pressedColor = candidateItemColorState.pressedBackgroundColor
+        itemView.findViewById<View>(R.id.candidate_divider)?.let { divider ->
+            divider.setBackgroundColor(
+                candidateDividerColor ?: ContextCompat.getColor(
+                    itemView.context,
+                    com.kazumaproject.core.R.color.sub_text_color,
+                )
+            )
+            (divider.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
+                val density = itemView.resources.displayMetrics.density
+                val verticalMargin = (
+                    (candidateDividerVerticalMarginDp ?: DEFAULT_CANDIDATE_DIVIDER_VERTICAL_MARGIN_DP) * density
+                ).toInt()
+                if (params.topMargin != verticalMargin || params.bottomMargin != verticalMargin) {
+                    params.topMargin = verticalMargin
+                    params.bottomMargin = verticalMargin
+                    divider.layoutParams = params
+                }
+            }
+        }
         if (backgroundColor == null && pressedColor == null) {
             itemView.setBackgroundResource(defaultCandidateItemBackgroundRes())
             return
         }
 
-        itemView.background = StateListDrawable().apply {
-            addState(
-                intArrayOf(android.R.attr.state_pressed),
-                createCandidateItemDrawable(
-                    pressedColor ?: ContextCompat.getColor(
-                        itemView.context,
-                        com.kazumaproject.core.R.color.qwety_key_bg_color
-                    ),
-                    itemView.context.resources.displayMetrics.density
-                )
-            )
-            addState(
-                intArrayOf(),
-                createCandidateItemDrawable(
-                    backgroundColor ?: Color.TRANSPARENT,
-                    itemView.context.resources.displayMetrics.density
-                )
-            )
-        }
+        itemView.background = createCandidateItemBackgroundDrawable(
+            backgroundColor ?: Color.TRANSPARENT,
+            pressedColor ?: ContextCompat.getColor(
+                itemView.context,
+                com.kazumaproject.core.R.color.qwety_key_bg_color,
+            ),
+            itemView.context.resources.displayMetrics.density,
+            candidateItemColorState.cornerRadiusDp,
+        )
     }
 
     private fun defaultCandidateItemBackgroundRes(): Int {
@@ -1785,13 +2449,6 @@ class SuggestionAdapter internal constructor(
             com.kazumaproject.core.R.drawable.recyclerview_item_bg_material
         } else {
             com.kazumaproject.core.R.drawable.recyclerview_item_bg
-        }
-    }
-
-    private fun createCandidateItemDrawable(color: Int, density: Float): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = 16f * density
         }
     }
 

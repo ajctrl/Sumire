@@ -13,6 +13,11 @@ import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.View
 import androidx.core.graphics.toColorInt
+import com.kazumaproject.core.ui.font.KeyboardFontAware
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
+import com.kazumaproject.core.domain.skin.KeyboardSkinId
+import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
 import com.kazumaproject.custom_keyboard.data.CircularFlickDirection
 import com.kazumaproject.custom_keyboard.data.FlickAction
 import com.kazumaproject.custom_keyboard.data.FlickPopupColorTheme
@@ -26,7 +31,7 @@ class CustomAngleFlickPopupView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
-) : View(context, attrs, defStyleAttr) {
+) : View(context, attrs, defStyleAttr), KeyboardFontAware {
 
     // ... (PaintやThemeの定義は変更なし) ...
     private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -57,7 +62,14 @@ class CustomAngleFlickPopupView @JvmOverloads constructor(
     )
 
     init {
+        setKeyboardFont(KeyboardFontApplicator.processSnapshot)
         applyThemeToPaints()
+    }
+
+    override fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        KeyboardFontApplicator.track(this)
+        KeyboardFontApplicator.apply(textPaint, snapshot)
+        invalidate()
     }
 
     private var currentFlickDirection = CircularFlickDirection.TAP
@@ -175,8 +187,41 @@ class CustomAngleFlickPopupView @JvmOverloads constructor(
         recalculateUiComponents()
     }
 
+    private var skinId = KeyboardSkinId.DEFAULT
+    fun applyPopupViewStyle(style: com.kazumaproject.core.data.popup.PopupViewStyle) {
+        skinId = style.skinId
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        KeyboardSkinRegistry.find(skinId)?.let { skin ->
+            fun cell(label: String, x: Float, y: Float, selected: Boolean) {
+                if (label.isEmpty()) return
+                val half = centerCircleRadius
+                skin.popupDrawable(resources, com.kazumaproject.core.ui.skin.PopupDirection.CENTER, selected).apply {
+                    setBounds((x - half).toInt(), (y - half).toInt(), (x + half).toInt(), (y + half).toInt())
+                    draw(canvas)
+                }
+                val labelPaint = Paint(textPaint).apply {
+                    color = if (selected) skin.palette.selectionText else skin.palette.text
+                    typeface = Typeface.DEFAULT
+                }
+                canvas.drawText(label, x, y - (labelPaint.ascent() + labelPaint.descent()) / 2, labelPaint)
+            }
+            targetPositions.forEach { (direction, position) ->
+                if (isFullUIModeActive || currentFlickDirection == direction) {
+                    val label = if (direction == mapSwitchDirection && showMapSwitchLabel)
+                        mapSwitchLabel.orEmpty().ifEmpty { characterMap[direction].toDisplayLabel() }
+                        else characterMap[direction].toDisplayLabel()
+                    cell(label, position.x, position.y, currentFlickDirection == direction)
+                }
+            }
+            cell(characterMap[currentFlickDirection].toDisplayLabel().ifEmpty {
+                characterMap[CircularFlickDirection.TAP].toDisplayLabel()
+            }, width / 2f, height / 2f, currentFlickDirection == CircularFlickDirection.TAP)
+            return
+        }
 
         val cx = width / 2f
         val cy = height / 2f

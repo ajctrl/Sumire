@@ -35,3 +35,8 @@ app/liteStandard
 *.log
 google-services.json
 output.json
+.idea/gradle.xml
+
+
+# Python workflow tests
+__pycache__/

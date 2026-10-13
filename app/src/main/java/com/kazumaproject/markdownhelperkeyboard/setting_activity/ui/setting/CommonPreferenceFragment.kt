@@ -16,6 +16,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.os.LocaleListCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
@@ -25,11 +26,13 @@ import com.afollestad.materialdialogs.MaterialDialog
 import com.afollestad.materialdialogs.color.colorChooser
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.CandidateReadingSizeLimits
 import com.kazumaproject.markdownhelperkeyboard.R
 import com.kazumaproject.markdownhelperkeyboard.ime_service.image_effect.CinematicWaveSettings
 import com.kazumaproject.markdownhelperkeyboard.ime_service.image_effect.KeyboardTouchEffectQuality
 import com.kazumaproject.markdownhelperkeyboard.ime_service.image_effect.KeyboardTouchEffectType
 import com.kazumaproject.markdownhelperkeyboard.ime_service.image_effect.SprayPaintSettings
+import com.kazumaproject.markdownhelperkeyboard.local_font.LocalFontRepository
 import com.kazumaproject.markdownhelperkeyboard.setting_activity.AppPreference
 import com.kazumaproject.markdownhelperkeyboard.variant.AppVariantConfig
 import dagger.hilt.android.AndroidEntryPoint
@@ -37,6 +40,9 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class KeyboardTouchEffectPreferenceVisibility(
     val showQuality: Boolean,
@@ -89,6 +95,9 @@ open class CommonPreferenceFragment : PreferenceFragmentCompat() {
     @Inject
     lateinit var appPreference: AppPreference
 
+    @Inject
+    lateinit var localFontRepository: LocalFontRepository
+
     private var count = 0
 
     private val exportLauncher =
@@ -107,18 +116,21 @@ open class CommonPreferenceFragment : PreferenceFragmentCompat() {
     private val importLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri == null) return@registerForActivityResult
-            runCatching {
-                val json = readTextFromUri(uri)
-                AppPreference.importAllFromJson(json, replaceAll = true)
+            viewLifecycleOwner.lifecycleScope.launch {
+                try {
+                    val json = withContext(Dispatchers.IO) { readTextFromUri(uri) }
+                    AppPreference.importAllFromJson(json, replaceAll = true)
 
-                // 旧→新キー移行などがあるなら復元後に実行
-                AppPreference.migrateSumirePreferenceIfNeeded()
-                AppPreference.migratePredictionLookaheadPreferenceIfNeeded()
-            }.onSuccess {
-                toast("Backup imported")
-                requireActivity().recreate()
-            }.onFailure {
-                toast("Import failed: ${it.message}")
+                    // Reset device-local display assets only after the JSON has been applied.
+                    localFontRepository.restoreStandard()
+                    AppPreference.migrateSumirePreferenceIfNeeded()
+                    AppPreference.migratePredictionLookaheadPreferenceIfNeeded()
+                    toast("Backup imported")
+                    requireActivity().recreate()
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    toast("Import failed: ${e.message}")
+                }
             }
         }
 
@@ -383,7 +395,39 @@ open class CommonPreferenceFragment : PreferenceFragmentCompat() {
     }
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
+        val guidePreferences = androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext())
+        val guideSettings = com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.ComposingGuideSettings(guidePreferences)
         setPreferencesFromResource(preferencesXmlRes, rootKey)
+        fun updateGuideModeEnabled(text: Boolean = guideSettings.textEnabled, candidates: Boolean = guideSettings.enabled) {
+            findPreference<ListPreference>("composing_guide_display_mode")?.isEnabled = text && candidates
+        }
+        updateGuideModeEnabled()
+        findPreference<SwitchPreferenceCompat>("composing_guide_text_enabled")?.setOnPreferenceChangeListener { _, value ->
+            updateGuideModeEnabled(text = value as Boolean)
+            true
+        }
+        findPreference<SwitchPreferenceCompat>("composing_guide_enabled")?.setOnPreferenceChangeListener { _, value ->
+            updateGuideModeEnabled(candidates = value as Boolean)
+            true
+        }
+        findPreference<SeekBarPreference>("composing_guide_text_size_setting")?.apply {
+            value = guideSettings.textSize.toInt()
+            setOnPreferenceChangeListener { _, newValue -> guideSettings.textSize = (newValue as Int).toFloat(); true }
+        }
+        com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.GuideProfile.entries.forEach { profile ->
+            findPreference<Preference>("composing_guide_${profile.key}_reset")?.setOnPreferenceClickListener {
+                com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.ComposingGuideSettings.reset(guidePreferences, profile)
+                true
+            }
+        }
+
+
+        findPreference<SwitchPreferenceCompat>(AppPreference.INLINE_SUGGESTION_ENABLED_KEY)?.let {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                it.isEnabled = false
+                it.summary = getString(R.string.inline_suggestion_unsupported_summary)
+            }
+        }
 
         val packageInfo = requireContext().packageManager.getPackageInfo(
             requireContext().packageName, 0
@@ -997,6 +1041,8 @@ open class CommonPreferenceFragment : PreferenceFragmentCompat() {
             "setting_route_keyboard_theme" to R.id.keyboardThemeFragment,
             "setting_route_kana_preferences" to R.id.kanaPreferenceFragment,
             "setting_route_qwerty_preferences" to R.id.qwertyPreferenceFragment,
+            "setting_route_qwerty_english_preferences" to R.id.qwertyEnglishPreferenceFragment,
+            "setting_route_qwerty_romaji_preferences" to R.id.qwertyRomajiPreferenceFragment,
             "setting_route_sumire_preferences" to R.id.sumirePreferenceFragment,
             "setting_route_custom_keyboard_preferences" to R.id.customKeyboardPreferenceFragment,
             "setting_route_tablet_preferences" to R.id.tabletPreferenceFragment,
@@ -1021,6 +1067,14 @@ open class CommonPreferenceFragment : PreferenceFragmentCompat() {
 
     override fun onResume() {
         super.onResume()
+        val guideSettings = com.kazumaproject.markdownhelperkeyboard.ime_service.composing_guide.ComposingGuideSettings(
+            androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext()))
+        findPreference<ListPreference>("composing_guide_display_mode")?.isEnabled = guideSettings.textEnabled && guideSettings.enabled
+        findPreference<SeekBarPreference>("composing_guide_text_size_setting")?.value = guideSettings.textSize.toInt()
+        lifecycleScope.launch {
+            localFontRepository.loadIfNeeded()
+            syncCandidateReadingSizePreference()
+        }
         syncDefaultEmojiSkinTonePreference()
         updateCursorMoveTargetPairsSummary()
     }
@@ -1033,6 +1087,12 @@ open class CommonPreferenceFragment : PreferenceFragmentCompat() {
             // Viewが生成されていない場合などを考慮して例外は無視
         }
         super.onDestroyView()
+    }
+
+    private fun syncCandidateReadingSizePreference() {
+        findPreference<SeekBarPreference>(AppPreference.LIVE_CONVERSION_CANDIDATE_YOMI_SIZE_KEY)?.apply {
+            CandidateReadingSizeLimits.configurePreference(requireContext(), this)
+        }
     }
 
     private fun syncDefaultEmojiSkinTonePreference() {

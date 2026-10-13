@@ -11,6 +11,11 @@ import android.util.TypedValue
 import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
+import com.kazumaproject.core.domain.skin.KeyboardSkinId
+import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
+import com.kazumaproject.core.ui.font.KeyboardFontAware
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
 import com.kazumaproject.core.data.popup.PopupViewStyle
 import com.kazumaproject.core.domain.extensions.getThemeColor
 import com.kazumaproject.core.domain.extensions.isDarkThemeOn
@@ -25,7 +30,7 @@ import com.kazumaproject.custom_keyboard.data.TfbiGuidePopupState
  * direction. It paints a light guide card, a blue current-output pill, and only the available
  * next labels, matching the guide figures used by TFBi documentation.
  */
-class TfbiGuidePopupView(context: Context) : View(context) {
+class TfbiGuidePopupView(context: Context) : View(context), KeyboardFontAware {
 
     private val defaultPanelColor = if (context.isDarkThemeOn()) {
         context.getThemeColor(com.google.android.material.R.attr.colorSurfaceContainerHighest)
@@ -71,6 +76,17 @@ class TfbiGuidePopupView(context: Context) : View(context) {
     private var activeTextColor: Int = Color.WHITE
     private var inputTextTransform: (String) -> String = { it }
 
+    init {
+        setKeyboardFont(KeyboardFontApplicator.processSnapshot)
+    }
+
+    override fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        KeyboardFontApplicator.track(this)
+        KeyboardFontApplicator.apply(textPaint, snapshot)
+        KeyboardFontApplicator.apply(activeTextPaint, snapshot)
+        invalidate()
+    }
+
     fun setState(state: TfbiGuidePopupState) {
         this.state = state
         invalidate()
@@ -86,7 +102,8 @@ class TfbiGuidePopupView(context: Context) : View(context) {
             sizeScalePercent = style.sizeScalePercent.coerceIn(50, 200),
             textSizeSp = style.textSizeSp.coerceIn(8f, 48f),
             backgroundColor = style.backgroundColor,
-            textColor = style.textColor
+            textColor = style.textColor,
+            skinId = style.skinId
         )
         popupBackgroundColor = style.backgroundColor ?: configuredBackgroundColor
         activeColor = configuredHighlightedColor ?: DEFAULT_ACTIVE_COLOR
@@ -113,6 +130,12 @@ class TfbiGuidePopupView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        val skin = KeyboardSkinRegistry.find(popupStyle.skinId)
+        if (skin != null) {
+            activeColor = skin.palette.selection
+            activeTextColor = skin.palette.selectionText
+            popupTextColor = skin.palette.text
+        }
         val inset = dp(1f)
         val panel = RectF(inset, inset, width - inset, height - inset)
         val panelColor = popupBackgroundColor ?: defaultPanelColor
@@ -127,9 +150,10 @@ class TfbiGuidePopupView(context: Context) : View(context) {
         )
         borderPaint.color = ColorUtils.setAlphaComponent(popupTextColor, 105)
         gridPaint.color = ColorUtils.setAlphaComponent(popupTextColor, 70)
+        if (skin != null) { panelPaint.shader = null; panelPaint.color = skin.palette.key }
         canvas.drawRoundRect(panel, dp(4f), dp(4f), panelPaint)
         panelPaint.shader = null
-        canvas.drawRoundRect(panel, dp(4f), dp(4f), borderPaint)
+        if (skin == null) canvas.drawRoundRect(panel, dp(4f), dp(4f), borderPaint)
 
         val cellWidth = panel.width() / 3f
         val cellHeight = panel.height() / 3f

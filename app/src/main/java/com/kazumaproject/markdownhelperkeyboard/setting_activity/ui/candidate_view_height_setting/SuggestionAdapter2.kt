@@ -1,5 +1,8 @@
 package com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.candidate_view_height_setting
 
+import com.kazumaproject.core.ui.font.KeyboardFontApplicator
+import com.kazumaproject.core.ui.font.KeyboardFontSnapshot
+import com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.CandidateReadingSizeLimits
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PorterDuff
@@ -28,9 +31,12 @@ import com.kazumaproject.core.domain.extensions.isAllHalfWidthNumericSymbol
 import com.kazumaproject.core.domain.extensions.isDarkThemeOn
 import com.kazumaproject.core.domain.extensions.setDrawableSolidColor
 import com.kazumaproject.core.domain.state.TenKeyQWERTYMode
+import com.kazumaproject.markdownhelperkeyboard.setting_activity.AppPreference
 import com.kazumaproject.markdownhelperkeyboard.R
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_ERA
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_CALCULATION
+import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_FORMULA_TEX
+import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_FORMULA_UNICODE
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_LEARNED_DICTIONARY
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_TIME
 import com.kazumaproject.markdownhelperkeyboard.converter.candidate.CANDIDATE_TYPE_UNIT_CONVERSION
@@ -43,6 +49,8 @@ import com.kazumaproject.markdownhelperkeyboard.custom_keyboard.data.CustomKeybo
 import com.kazumaproject.markdownhelperkeyboard.gemma.GemmaTranslationManager
 import com.kazumaproject.markdownhelperkeyboard.ime_service.extensions.correctReading
 import com.kazumaproject.markdownhelperkeyboard.ime_service.extensions.debugPrintCodePoints
+import com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.FormulaView
+import com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.resolveCandidateYomiPresentation
 import com.kazumaproject.markdownhelperkeyboard.short_cut.ShortcutType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -70,31 +78,6 @@ private class PreviewCandidateItemColorState {
         this.pressedBackgroundColor = pressedBackgroundColor
         return true
     }
-}
-
-private data class PreviewCandidateYomiPresentation(
-    val isVisible: Boolean,
-    val text: String,
-    val textSize: Float
-)
-
-private fun resolvePreviewCandidateYomiPresentation(
-    showCandidateYomiForLiveConversion: Boolean,
-    isFirstCandidate: Boolean,
-    suggestion: Candidate,
-    candidateTextSize: Float
-): PreviewCandidateYomiPresentation {
-    val yomi = suggestion.yomi
-    val shouldShowYomi =
-        showCandidateYomiForLiveConversion &&
-            isFirstCandidate &&
-            !yomi.isNullOrBlank() &&
-            yomi != suggestion.string
-    return PreviewCandidateYomiPresentation(
-        isVisible = shouldShowYomi,
-        text = if (shouldShowYomi) yomi.orEmpty() else "",
-        textSize = candidateTextSize * 0.72f
-    )
 }
 
 class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
@@ -198,8 +181,17 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private var incognitoIconDrawable: android.graphics.drawable.Drawable? = null
 
+    private var keyboardFontSnapshot = KeyboardFontApplicator.processSnapshot
+
+    fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
+        if (keyboardFontSnapshot == snapshot) return
+        keyboardFontSnapshot = snapshot
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     private var candidateTextSize: Float = 14f
     private var candidateTextColor: Int? = null
+    private var candidateYomiTextSize: Float = AppPreference.DEFAULT_LIVE_CONVERSION_CANDIDATE_YOMI_SIZE.toFloat()
     private var showCandidateYomiForLiveConversion: Boolean = false
     private var showDictionaryCandidateLabels: Boolean = false
     private val candidateItemColorState = PreviewCandidateItemColorState()
@@ -517,6 +509,7 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         )
 
     inner class SuggestionViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val formulaView: FormulaView = itemView.findViewById(R.id.suggestion_item_formula_view)
         val text: MaterialTextView = itemView.findViewById(R.id.suggestion_item_text_view)
         val yomiText: MaterialTextView = itemView.findViewById(R.id.suggestion_item_yomi_text_view)
         val typeText: MaterialTextView = itemView.findViewById(R.id.suggestion_item_type_text_view)
@@ -671,6 +664,7 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                     visibility = View.GONE
                 }
             }
+            applyEmptyHelperIconColor(incognitoIcon)
 
             undoIcon?.apply {
                 isVisible = state.undoEnabled
@@ -788,6 +782,10 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     ) {
         applyEmptyHelperButtonBackground(parent, isDynamicColorEnable)
         applyEmptyHelperTextColor(text)
+        applyEmptyHelperIconColor(icon)
+    }
+
+    private fun applyEmptyHelperIconColor(icon: ImageView?) {
         candidateEmptyDrawableTextColor?.let { color ->
             icon?.setColorFilter(color, PorterDuff.Mode.SRC_IN)
         } ?: icon?.clearColorFilter()
@@ -881,6 +879,12 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         notifyItemRangeChanged(0, itemCount)
     }
 
+    fun setCandidateYomiTextSize(size: Float) {
+        if (candidateYomiTextSize == size) return
+        candidateYomiTextSize = size
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     fun setShowCandidateYomiForLiveConversion(enabled: Boolean) {
         if (showCandidateYomiForLiveConversion == enabled) return
         showCandidateYomiForLiveConversion = enabled
@@ -930,6 +934,8 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         applyCandidateItemBackground(holder.itemView)
         val suggestion = item.candidate
         val position = item.candidateIndex
+        val formulaPresentation = suggestion.presentation
+        val isFormula = formulaPresentation != null
         val paddingLength = when {
             position == 0 -> 4
             suggestion.string.length == 1 -> 4
@@ -947,28 +953,37 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             suggestion.string.padStart(suggestion.string.length + paddingLength)
                 .plus(" ".repeat(paddingLength))
         }
+        holder.formulaView.isVisible = isFormula
+        holder.formulaView.setPresentation(formulaPresentation)
+        holder.formulaView.setFormulaTextSizeSp(candidateTextSize)
+        holder.text.isVisible = !isFormula
 
+        listOf(holder.text, holder.yomiText, holder.typeText).forEach {
+            KeyboardFontApplicator.apply(
+                it, keyboardFontSnapshot)
+        }
         holder.text.textSize = candidateTextSize
-        val yomiPresentation = resolvePreviewCandidateYomiPresentation(
+        val yomiPresentation = resolveCandidateYomiPresentation(
             showCandidateYomiForLiveConversion = showCandidateYomiForLiveConversion,
             isFirstCandidate = position == 0,
             suggestion = suggestion,
-            candidateTextSize = candidateTextSize
+            readingTextSize = candidateYomiTextSize
         )
-        holder.yomiText.isVisible = yomiPresentation.isVisible
+        holder.yomiText.isVisible = yomiPresentation.isVisible && !isFormula
         holder.yomiText.text = yomiPresentation.text
-        holder.yomiText.textSize = yomiPresentation.textSize
-        holder.yomiText.translationX = if (yomiPresentation.isVisible) {
-            holder.text.paint.measureText(" ".repeat(paddingLength))
-        } else {
-            0f
-        }
+        holder.yomiText.textSize = if (yomiPresentation.isVisible) {
+            CandidateReadingSizeLimits.clamp(
+                holder.itemView.context, yomiPresentation.textSize)
+        } else yomiPresentation.textSize
 
         candidateTextColor?.let { color ->
             holder.text.setTextColor(color)
             holder.typeText.setTextColor(color)
             holder.yomiText.setTextColor(color)
         }
+        holder.formulaView.setFormulaTextColor(
+            candidateTextColor ?: holder.text.currentTextColor
+        )
 
         holder.typeText.text = when (suggestion.type) {
             (1).toByte() -> ""
@@ -1019,6 +1034,10 @@ class SuggestionAdapter2 : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 holder.itemView.context.getString(R.string.candidate_badge_calculation)
             CANDIDATE_TYPE_UNIT_CONVERSION ->
                 holder.itemView.context.getString(R.string.candidate_badge_unit_conversion)
+            CANDIDATE_TYPE_FORMULA_UNICODE ->
+                holder.itemView.context.getString(R.string.candidate_badge_formula_unicode)
+            CANDIDATE_TYPE_FORMULA_TEX ->
+                holder.itemView.context.getString(R.string.candidate_badge_formula_tex)
             CANDIDATE_TYPE_USER_TEMPLATE ->
                 if (showDictionaryCandidateLabels) "定型" else ""
             CANDIDATE_TYPE_TEXT_MACRO -> "マクロ"

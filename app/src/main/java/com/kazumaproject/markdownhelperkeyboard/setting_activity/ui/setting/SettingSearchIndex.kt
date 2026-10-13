@@ -1,10 +1,12 @@
 package com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting
 
 import android.content.Context
+import android.content.res.Configuration
 import android.content.res.XmlResourceParser
 import androidx.annotation.IdRes
 import androidx.annotation.XmlRes
 import com.kazumaproject.markdownhelperkeyboard.R
+import com.kazumaproject.markdownhelperkeyboard.setting_activity.AppPreference
 import com.kazumaproject.markdownhelperkeyboard.variant.AppVariantConfig
 import org.xmlpull.v1.XmlPullParser
 import java.text.Normalizer
@@ -16,6 +18,14 @@ object SettingSearchIndex {
     private const val APP_NS = "http://schemas.android.com/apk/res-auto"
     private const val SINGLE_CHARACTER_RESULT_LIMIT = 20
     private const val MULTI_CHARACTER_RESULT_LIMIT = 50
+
+    @Volatile
+    private var destinationCache: DestinationCache? = null
+
+    private data class DestinationCache(
+        val configuration: Configuration,
+        val destinations: List<SettingDestination>,
+    )
     private val extraKeywordsByKey = mapOf(
         "keyboard_selection_preference" to listOf(
             "choose",
@@ -69,6 +79,7 @@ object SettingSearchIndex {
     )
 
     private val highlightableDestinations = setOf(
+        R.id.splitKeyboardPreferenceFragment,
         R.id.keyboardDisplayPreferenceFragment,
         R.id.inputMethodPreferenceFragment,
         R.id.candidateConversionPreferenceFragment,
@@ -89,9 +100,7 @@ object SettingSearchIndex {
         val topLevel = SettingDestinations.categories(context) +
             SettingDestinations.management(context) +
             SettingDestinations.frequentCandidates(context)
-        val xmlItems = sources().flatMap { source ->
-            readPreferenceXml(context, source)
-        }
+        val xmlItems = preferenceXmlDestinations(context)
         return (topLevel + xmlItems).distinctBy { destination ->
             val targetId = SettingDestinations.destinationId(destination.destination)
             "${destination.key}:${destination.category}:$targetId"
@@ -206,11 +215,27 @@ object SettingSearchIndex {
     ): List<SettingDestination> {
         val keySet = keys.toSet()
         val order = keys.withIndex().associate { it.value to it.index }
-        return sources()
-            .flatMap { source -> readPreferenceXml(context, source) }
+        return preferenceXmlDestinations(context)
             .filter { it.key in keySet }
             .distinctBy { it.key }
             .sortedBy { order[it.key] ?: Int.MAX_VALUE }
+    }
+
+    private fun preferenceXmlDestinations(context: Context): List<SettingDestination> {
+        val configuration = Configuration(context.resources.configuration)
+        destinationCache
+            ?.takeIf { it.configuration == configuration }
+            ?.let { return it.destinations }
+
+        val destinations = sources().flatMap { source ->
+            val items = readPreferenceXml(context, source)
+            // New settings routes must resolve to the operation screen, not its legacy duplicate.
+            if (source.xmlRes == R.xml.pref_common_legacy) {
+                items.filterNot { it.key == AppPreference.INDEPENDENT_MULTI_TOUCH_KEY }
+            } else items
+        }
+        destinationCache = DestinationCache(configuration, destinations)
+        return destinations
     }
 
     fun legacyDestinationsForKeys(
@@ -319,8 +344,10 @@ object SettingSearchIndex {
         }
 
     private fun sources(): List<PreferenceXmlSource> = buildList {
+        add(PreferenceXmlSource(R.xml.pref_common, R.id.commonPreferenceFragment, SettingCategory.ADVANCED))
         add(PreferenceXmlSource(R.xml.pref_common_legacy, R.id.legacyCommonPreferenceFragment, SettingCategory.ADVANCED))
         add(PreferenceXmlSource(R.xml.pref_keyboard_display, R.id.keyboardDisplayPreferenceFragment, SettingCategory.KEYBOARD_DISPLAY))
+        add(PreferenceXmlSource(R.xml.pref_split_keyboard, R.id.splitKeyboardPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_input_method, R.id.inputMethodPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_candidate_conversion, R.id.candidateConversionPreferenceFragment, SettingCategory.CANDIDATE_CONVERSION))
         add(PreferenceXmlSource(R.xml.pref_conversion_engine, R.id.conversionEnginePreferenceFragment, SettingCategory.CONVERSION_ENGINE))
@@ -339,6 +366,8 @@ object SettingSearchIndex {
         add(PreferenceXmlSource(R.xml.pref_advanced, R.id.advancedPreferenceFragment, SettingCategory.ADVANCED))
         add(PreferenceXmlSource(R.xml.pref_kana, R.id.kanaPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_qwerty, R.id.qwertyPreferenceFragment, SettingCategory.INPUT_METHOD))
+        add(PreferenceXmlSource(R.xml.pref_qwerty_english, R.id.qwertyEnglishPreferenceFragment, SettingCategory.INPUT_METHOD))
+        add(PreferenceXmlSource(R.xml.pref_qwerty_romaji, R.id.qwertyRomajiPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_sumire, R.id.sumirePreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_custom, R.id.customKeyboardPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_tablet, R.id.tabletPreferenceFragment, SettingCategory.INPUT_METHOD))
