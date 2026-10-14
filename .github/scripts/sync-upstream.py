@@ -1,5 +1,6 @@
 """Merge the latest stable upstream release, preserving Git ancestry and fork changes."""
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,11 @@ import tempfile
 UPSTREAM = "KazumaProject/JapaneseKeyboard"
 BASE = "dev"
 STATE = Path(".github/upstream.json")
+VERSION_FILE = "app/build.gradle"
+spec = importlib.util.spec_from_file_location(
+    "release_versions", Path(__file__).with_name("release-upstream.py"))
+release_versions = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release_versions)
 
 
 def run(*args, check=True):
@@ -46,6 +52,32 @@ def output(**values):
             stream.write(f"{key}={value}\n")
 
 
+def merge_app_version(base, upstream, tag, previous_tag):
+    """Merge real Gradle changes normally, handling only release numbers specially."""
+    ancestor = git("merge-base", base, upstream)
+    original = git("show", f"{ancestor}:{VERSION_FILE}")
+    ours = git("show", f"{base}:{VERSION_FILE}")
+    theirs = git("show", f"{upstream}:{VERSION_FILE}")
+    old_name, old_code = release_versions.version_info(original)
+    fork_name, fork_code = release_versions.version_info(ours)
+    upstream_name, upstream_code = release_versions.version_info(theirs)
+    release_versions.assert_version_base(fork_name, previous_tag)
+    if tag != f"v{upstream_name}":
+        raise ValueError("Upstream tag and application version do not match")
+    # Remove only our version-number edits before doing a three-way merge.
+    # Conflicts in application ID, signing, dependencies, etc. still stop the update.
+    ours = release_versions.replace_version_info(ours, old_name, old_code)
+    with tempfile.TemporaryDirectory() as directory:
+        paths = [Path(directory) / name for name in ("ours", "base", "theirs")]
+        for path, content in zip(paths, (ours, original, theirs)):
+            path.write_text(content + "\n")
+        merged = run("git", "merge-file", "-p", *map(str, paths), check=False)
+    if merged.returncode:
+        raise RuntimeError("Manual upstream merge required: app/build.gradle has non-version conflicts")
+    return release_versions.replace_version_info(
+        merged.stdout, upstream_name, max(upstream_code, fork_code + 1))
+
+
 def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     if repo != "ajctrl/Sumire":
@@ -70,15 +102,18 @@ def main():
     # Reject rewritten/divergent release history instead of attempting a reset.
     git("merge-base", "--is-ancestor", state["commit"], upstream)
     git("merge-base", "--is-ancestor", state["commit"], base)
+    merged_gradle = merge_app_version(base, upstream, tag, state["tag"])
     branch = f"upstream/{tag}-{base[:12]}"
     git("switch", "-c", branch)
     git("config", "user.name", "github-actions[bot]")
     git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
     merged = run("git", "merge", "--no-ff", "--no-commit", upstream, check=False)
-    if merged.returncode:
-        conflicts = git("diff", "--name-only", "--diff-filter=U")
+    conflicts = git("diff", "--name-only", "--diff-filter=U").splitlines()
+    if merged.returncode and (not conflicts or any(p != VERSION_FILE for p in conflicts)):
         git("merge", "--abort")
         raise RuntimeError(f"Manual upstream merge required:\n{conflicts}\n{merged.stderr}")
+    Path(VERSION_FILE).write_text(merged_gradle)
+    git("add", VERSION_FILE)
     # Never automatically change the code that grants approval to an update.
     protected = [".github/workflows/sync-upstream.yml",
                  ".github/workflows/android.yml",

@@ -92,4 +92,5 @@ jobs:
     uses: ./.github/workflows/android.yml
     with:
       ref: ${{ needs.merge.outputs.sha || needs.prepare.outputs.base }}
+      upstream_only: true
     secrets: inherit

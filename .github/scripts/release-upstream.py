@@ -1,4 +1,4 @@
-"""Plan or publish an immutable upstream release; never replace a published asset."""
+"""Plan or publish an immutable upstream or manual fork release."""
 import hashlib
 import json
 import os
@@ -15,6 +15,7 @@ APK_NAMES = (
     'app-liteFdroid-release.apk',
 )
 ASSET_NAMES = (*APK_NAMES, 'SHA256SUMS')
+VERSION_PATTERN = r'[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?'
 
 
 def run(*args, **kwargs):
@@ -42,11 +43,26 @@ def git(*args):
 
 
 def version_info(gradle):
-    name = re.search(r'^\s*versionName "([0-9]+\.[0-9]+\.[0-9]+)"\s*$', gradle, re.M)
+    name = re.search(r'^\s*versionName "(' + VERSION_PATTERN + r')"\s*$', gradle, re.M)
     code = re.search(r'^\s*versionCode ([0-9]+)\s*$', gradle, re.M)
     if not name or not code:
         raise ValueError('Cannot identify the release version in app/build.gradle')
     return name[1], int(code[1])
+
+
+def replace_version_info(gradle, name, code):
+    version_info(gradle)
+    gradle = re.sub(r'(?m)^(\s*versionName ")[^"]+("\s*)$',
+                    lambda m: m[1] + name + m[2], gradle)
+    return re.sub(r'(?m)^(\s*versionCode )[0-9]+(\s*)$',
+                  lambda m: m[1] + str(code) + m[2], gradle)
+
+
+def assert_version_base(name, upstream_tag):
+    if (not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', upstream_tag)
+            or not re.fullmatch(VERSION_PATTERN, name)
+            or '.'.join(name.split('.')[:3]) != upstream_tag[1:]):
+        raise ValueError('Upstream marker and application version do not match')
 
 
 def complete(release):
@@ -64,7 +80,8 @@ def output(**values):
 def assert_source(sha, tag):
     state = json.loads(git('show', f'{sha}:.github/upstream.json'))
     name, _ = version_info(git('show', f'{sha}:app/build.gradle'))
-    if state['repository'] != 'KazumaProject/JapaneseKeyboard' or state['tag'] != tag or tag != f'v{name}':
+    assert_version_base(name, state['tag'])
+    if state['repository'] != 'KazumaProject/JapaneseKeyboard' or tag != f'v{name}':
         raise ValueError('Upstream marker and application version do not match')
     git('merge-base', '--is-ancestor', state['commit'], sha)
     git('merge-base', '--is-ancestor', sha, 'origin/dev')
@@ -73,10 +90,13 @@ def assert_source(sha, tag):
 def plan(repo):
     sha = git('rev-parse', 'HEAD')
     state = json.loads(Path('.github/upstream.json').read_text())
-    tag = state['tag']
-    if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
-        raise ValueError('Expected a stable upstream tag')
+    name, _ = version_info(Path('app/build.gradle').read_text())
+    tag = f'v{name}'
     assert_source(sha, tag)
+    if os.environ.get('UPSTREAM_ONLY') == 'true' and tag != state['tag']:
+        output(needed='false', tag=tag)
+        print(f'{tag} is a manual fork release; automatic upstream sync will not publish it')
+        return
     if os.environ.get('GITHUB_REF_TYPE') == 'tag' and os.environ['GITHUB_REF_NAME'] != tag:
         raise ValueError('Pushed tag differs from the application version')
     release = api(f'repos/{repo}/releases/tags/{tag}', missing_ok=True)
@@ -105,7 +125,7 @@ def verify_manifest(directory, tag, sha):
 
 
 def publish(repo, tag, sha, directory):
-    if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag) or not re.fullmatch(r'[0-9a-f]{40}', sha):
+    if not re.fullmatch('v' + VERSION_PATTERN, tag) or not re.fullmatch(r'[0-9a-f]{40}', sha):
         raise ValueError('Invalid release identity')
     verify_manifest(directory, tag, sha)
     release = api(f'repos/{repo}/releases/tags/{tag}', missing_ok=True)
@@ -124,7 +144,8 @@ def publish(repo, tag, sha, directory):
     if release is None:
         release = api(f'repos/{repo}/releases', 'POST', {
             'tag_name': tag, 'target_commitish': sha, 'name': tag,
-            'body': f'Upstream {tag} with the Sumire Sync clipboard bridge.\n\nSource: {sha}\n',
+            'body': (f'Sumire {tag} with fork changes and the Sumire Sync clipboard bridge.\n\n'
+                     f'Upstream: v{".".join(tag[1:].split(".")[:3])}\nSource: {sha}\n'),
             'draft': True, 'prerelease': False, 'generate_release_notes': True,
         })
     run('gh', 'release', 'upload', tag, '--repo', repo, '--clobber',
