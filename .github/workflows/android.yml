@@ -15,6 +15,10 @@ on:
       ref:
         type: string
         required: true
+      upstream_only:
+        description: Automatic sync must not publish a manual fork revision
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -42,6 +46,7 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          UPSTREAM_ONLY: ${{ inputs.upstream_only && 'true' || 'false' }}
         run: python3 .github/scripts/release-upstream.py plan
 
   validate:

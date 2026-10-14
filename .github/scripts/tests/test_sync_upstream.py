@@ -44,11 +44,16 @@ class MergeTests(unittest.TestCase):
         os.chdir(self.root / "upstream")
         self.identity()
         Path("feature.txt").write_text("base\n")
+        Path("app").mkdir()
+        Path("app/build.gradle").write_text(
+            'android {\n    versionName "1.7.128"\n    versionCode 821\n}\n')
         self.commit("initial")
         self.initial = self.git("rev-parse", "HEAD")
         self.git("clone", "--bare", ".", str(self.root / "origin.git"))
         self.git("clone", str(self.root / "origin.git"), str(self.root / "fork"))
         Path("feature.txt").write_text("upstream update\n")
+        Path("app/build.gradle").write_text(
+            'android {\n    versionName "1.7.129"\n    versionCode 822\n}\n')
         self.commit("release")
         self.target = self.git("rev-parse", "HEAD")
         self.git("tag", "v1.7.129")
@@ -120,6 +125,37 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "HEAD"), base)
         self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertFalse((self.root / "outputs").exists())
+
+    def test_next_upstream_after_manual_revision_preserves_changes_and_increases_code(self):
+        Path("app/build.gradle").write_text(
+            'android {\n    versionName "1.7.128.2"\n    versionCode 823\n}\n'
+            '// fork configuration\n')
+        self.commit("manual revision")
+        self.git("push", "origin", "dev")
+        base = self.git("rev-parse", "HEAD")
+        self.invoke()
+        gradle = Path("app/build.gradle").read_text()
+        self.assertEqual(sync.release_versions.version_info(gradle), ("1.7.129", 824))
+        self.assertIn('// fork configuration', gradle)
+        self.assertEqual(self.git("show", "-s", "--format=%P", "HEAD"),
+                         f"{base} {self.target}")
+        self.assertEqual(json.loads(Path('.github/upstream.json').read_text())['tag'], 'v1.7.129')
+
+    def test_gradle_non_version_conflict_is_not_overwritten(self):
+        os.chdir(self.root / 'upstream')
+        p = Path('app/build.gradle')
+        p.write_text(p.read_text().replace('android {', 'android { // upstream'))
+        self.commit('upstream configuration')
+        self.git('tag', '-f', 'v1.7.129')
+        os.chdir(self.root / 'fork')
+        p.write_text(p.read_text().replace('android {', 'android { // fork'))
+        self.commit('fork configuration')
+        self.git('push', 'origin', 'dev')
+        before = self.git('rev-parse', 'HEAD')
+        with self.assertRaisesRegex(RuntimeError, 'non-version conflicts'):
+            self.invoke()
+        self.assertEqual(self.git('rev-parse', 'HEAD'), before)
+        self.assertEqual(self.git('status', '--porcelain'), '')
 
     def test_changed_automation_requires_manual_review(self):
         os.chdir(self.root / "upstream")
