@@ -18,8 +18,8 @@ Secrets. It compares each ABI's APK with the latest published Lite APK:
 
 - Package must be `com.example.sumire.lite`.
 - Signing certificate must match.
-- versionCode must be equal or greater. Same-version replacement is intentional;
-  no extra version bump is needed just for this device check.
+- versionCode must be equal or greater. This build uses versionName
+  `1.7.128.3-lite` and base versionCode 824 (ARM64: 825, x86_64: 826).
 
 On success, download the `lite-device-check-<commit>-<attempt>` artifact from
 the Actions run. It contains arm64-v8a and x86_64 APKs, SHA256SUMS and provenance
