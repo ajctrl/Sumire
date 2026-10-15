@@ -1,0 +1,92 @@
+name: Signed Lite device check
+
+on:
+  push:
+    branches: [test/floating-english-qwerty-release]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lite-device-check-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'ajctrl/Sumire' && github.ref == 'refs/heads/test/floating-english-qwerty-release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
+      - name: Check fork integration and verification scripts
+        run: |
+          python3 .github/scripts/check-fork-invariants.py
+          python3 -m unittest discover -s .github/scripts/tests -v
+      - name: Download published Lite APKs for update compatibility checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view --json tagName --jq .tagName > "$RUNNER_TEMP/lite-baseline-tag"
+          gh release download "$(cat "$RUNNER_TEMP/lite-baseline-tag")" --pattern 'app-liteStandard-*-release.apk' --dir "$RUNNER_TEMP/previous-lite"
+      - name: Test floating input mode changes
+        run: >-
+          ./gradlew :app:testLiteStandardDebugUnitTest
+          --tests '*FloatingTenkeyInputModeTest'
+          --tests '*TenkeyEnglishQwertySwitchResolverTest'
+          --tests '*SplitKeyboardServiceSyncTest'
+          --no-configuration-cache --no-daemon --max-workers=2
+      - name: Build signed Lite release
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 || secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            test -n "${!name}" || { echo "Missing signing secret: $name" >&2; exit 1; }
+          done
+          ./gradlew :app:assembleLiteStandardRelease -PsplitApks --no-configuration-cache --no-daemon --max-workers=2
+      - name: Verify update compatibility and prepare APKs
+        env:
+          PREVIOUS_LITE_DIRECTORY: ${{ runner.temp }}/previous-lite
+          DEVICE_CHECK_DIRECTORY: ${{ runner.temp }}/lite-device-check
+          DEVICE_CHECK_SHA: ${{ github.sha }}
+          BASELINE_TAG_FILE: ${{ runner.temp }}/lite-baseline-tag
+        run: python3 .github/scripts/verify-lite-device-check.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lite-device-check-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lite-device-check/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -f app/build/signing/release.keystore
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lite-device-check-tests-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
