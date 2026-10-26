@@ -34,7 +34,7 @@ jobs:
         with:
           cache-read-only: false
       - name: Install SDK
-        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'build-tools;35.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
       - name: Test update automation and fork invariants
         run: |
           python3 -m unittest discover -s .github/scripts/tests -v

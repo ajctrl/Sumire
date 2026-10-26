@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
@@ -98,24 +99,34 @@ class KeyboardSkinViewLifecycleTest {
             }
             val modeSwitch = view.findViewById<InputModeSwitch>(modeSwitchId)
 
+            fun modeIconPixels(): Bitmap {
+                val icon = requireNotNull(modeSwitch.drawable)
+                return Bitmap.createBitmap(240, 120, Bitmap.Config.ARGB_8888).also {
+                    val bounds = android.graphics.Rect(icon.bounds)
+                    try {
+                        icon.setBounds(0, 0, it.width, it.height)
+                        icon.draw(Canvas(it))
+                    } finally {
+                        icon.bounds = bounds
+                    }
+                }
+            }
+            apply(view, KeyboardSkinId.DEFAULT)
+            val original = modeIconPixels()
             apply(view, KeyboardSkinId.CUPERTINO_LIGHT)
-            // Local-font support now renders the colored labels in a Drawable.
-            // Check its visible palette instead of the previous null-drawable detail.
-            val icon = requireNotNull(modeSwitch.drawable)
-            val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
-            icon.setBounds(0, 0, 96, 96)
-            icon.draw(Canvas(bitmap))
-            val colors = IntArray(96 * 96)
-            bitmap.getPixels(colors, 0, 96, 0, 0, 96, 96)
-            bitmap.recycle()
-            val selected = requireNotNull(KeyboardSkinRegistry.find(KeyboardSkinId.CUPERTINO_LIGHT)).palette.specialText
-            assertTrue("${view.javaClass.simpleName} should draw selected labels in the skin color",
-                colors.any { it == selected })
-            assertTrue("${view.javaClass.simpleName} should draw translucent idle labels",
-                colors.any { (it ushr 24) in 1..220 && (it and 0x00ffffff) == (selected and 0x00ffffff) })
+            val skinned = modeIconPixels()
+            val labelRgb = requireNotNull(KeyboardSkinRegistry.find(KeyboardSkinId.CUPERTINO_LIGHT))
+                .palette.specialText and 0x00ffffff
+            val colors = IntArray(skinned.width * skinned.height)
+            skinned.getPixels(colors, 0, skinned.width, 0, 0, skinned.width, skinned.height)
+            assertTrue("${view.javaClass.simpleName} should draw an opaque selected label",
+                colors.any { (it and 0x00ffffff) == labelRgb && Color.alpha(it) == 255 })
+            assertTrue("${view.javaClass.simpleName} should draw dimmed inactive labels",
+                colors.any { (it and 0x00ffffff) == labelRgb && Color.alpha(it) in 1..220 })
 
             apply(view, KeyboardSkinId.DEFAULT)
-            assertTrue("${view.javaClass.simpleName} should restore its mode icon", modeSwitch.drawable != null)
+            assertTrue("${view.javaClass.simpleName} should restore its vector mode icon",
+                original.sameAs(modeIconPixels()))
         }
     }
 

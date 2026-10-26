@@ -88,6 +88,7 @@ object SettingSearchIndex {
         R.id.splitKeyboardPreferenceFragment,
         R.id.keyboardDisplayPreferenceFragment,
         R.id.inputMethodPreferenceFragment,
+        R.id.voiceInputPreferenceFragment,
         R.id.candidateConversionPreferenceFragment,
         R.id.conversionEnginePreferenceFragment,
         R.id.utilityCandidatePreferenceFragment,
@@ -355,6 +356,7 @@ object SettingSearchIndex {
         add(PreferenceXmlSource(R.xml.pref_keyboard_display, R.id.keyboardDisplayPreferenceFragment, SettingCategory.KEYBOARD_DISPLAY))
         add(PreferenceXmlSource(R.xml.pref_split_keyboard, R.id.splitKeyboardPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_input_method, R.id.inputMethodPreferenceFragment, SettingCategory.INPUT_METHOD))
+        add(PreferenceXmlSource(R.xml.pref_voice_input, R.id.voiceInputPreferenceFragment, SettingCategory.VOICE_INPUT))
         add(PreferenceXmlSource(R.xml.pref_candidate_conversion, R.id.candidateConversionPreferenceFragment, SettingCategory.CANDIDATE_CONVERSION))
         add(PreferenceXmlSource(R.xml.pref_conversion_engine, R.id.conversionEnginePreferenceFragment, SettingCategory.CONVERSION_ENGINE))
         add(PreferenceXmlSource(R.xml.pref_utility_candidate, R.id.utilityCandidatePreferenceFragment, SettingCategory.CONVERSION_ENGINE))
@@ -371,6 +373,7 @@ object SettingSearchIndex {
         add(PreferenceXmlSource(R.xml.pref_general_info, R.id.generalInfoPreferenceFragment, SettingCategory.APP_INFO))
         add(PreferenceXmlSource(R.xml.pref_advanced, R.id.advancedPreferenceFragment, SettingCategory.ADVANCED))
         add(PreferenceXmlSource(R.xml.pref_kana, R.id.kanaPreferenceFragment, SettingCategory.INPUT_METHOD))
+        add(PreferenceXmlSource(R.xml.pref_gojuon, R.id.gojuonPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_qwerty, R.id.qwertyPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_qwerty_english, R.id.qwertyEnglishPreferenceFragment, SettingCategory.INPUT_METHOD))
         add(PreferenceXmlSource(R.xml.pref_qwerty_romaji, R.id.qwertyRomajiPreferenceFragment, SettingCategory.INPUT_METHOD))
@@ -397,6 +400,7 @@ object SettingSearchIndex {
             SettingTabRegistry.TAB_CONVERSION_ENGINE -> SettingCategory.CONVERSION_ENGINE
             SettingTabRegistry.TAB_DICTIONARY -> SettingCategory.DICTIONARY
             SettingTabRegistry.TAB_TEXT_MACRO -> SettingCategory.TEXT_MACRO
+            SettingTabRegistry.TAB_VOICE_INPUT -> SettingCategory.VOICE_INPUT
             SettingTabRegistry.TAB_ZENZ,
             SettingTabRegistry.TAB_GEMMA -> SettingCategory.AI_CONVERSION
             SettingTabRegistry.TAB_COMMON -> SettingCategory.ADVANCED
@@ -528,6 +532,11 @@ object SettingSearchIndex {
             ) {
                 add("keyboard_touch_effect_type_preference")
             }
+            if (key.startsWith("voice_input_space_")) {
+                add(AppPreference.VOICE_INPUT_SPACE_REPLACEMENT_ENABLED_KEY)
+                add(AppPreference.VOICE_INPUT_SPACE_REPLACEMENT_KEY)
+                add(AppPreference.VOICE_INPUT_SPACE_CUSTOM_TEXT_KEY)
+            }
             if (!dependencyKey.isNullOrBlank()) {
                 add(dependencyKey)
             }
@@ -549,6 +558,12 @@ object SettingSearchIndex {
     ): SettingDestinationType {
         val fallback = fallbackDestinationType(key, destinationId, highlightPreferenceKey)
         if (SettingDestinations.isManagementDestinationKey(key)) return fallback
+        // These switches use DictionaryOverrideStore and compatibility checks.
+        // Search/frequent cards must navigate to their handler, not write default preferences.
+        if (com.kazumaproject.markdownhelperkeyboard.dictionary_override.ClassifiedDictionaries.all
+                .any { it.preferenceKey == key }) return fallback
+        // Open the shared screen so replacement/custom-text dependencies also apply to search/favorites.
+        if (destinationId == R.id.voiceInputPreferenceFragment) return fallback
 
         val simpleTagName = parser.name.substringAfterLast('.')
         return when (simpleTagName) {
