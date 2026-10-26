@@ -6,6 +6,7 @@ import android.os.Looper
 import android.widget.EditText
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.FloatingCandidateListAdapter
 import com.kazumaproject.markdownhelperkeyboard.ime_service.floating_dictionary.FloatingDictionaryEditText
@@ -41,6 +42,8 @@ class FloatingDictionaryInputTargetTest {
     private val service = spy(IMEService()).also { service ->
         ReflectionHelpers.callInstanceMethod<Unit>(service, "attachBaseContext",
             ClassParameter.from(Context::class.java, context))
+        ReflectionHelpers.setField(service, "runtimeInputSharedPreferences",
+            PreferenceManager.getDefaultSharedPreferences(context))
         service.zenzRuntimeClient = mock()
         service.appPreference = mock<AppPreference>().apply {
             whenever(undo_enable_preference).thenReturn(true)

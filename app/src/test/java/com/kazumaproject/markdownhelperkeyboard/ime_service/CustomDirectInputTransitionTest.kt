@@ -48,6 +48,8 @@ class CustomDirectInputTransitionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         PreferenceManager.getDefaultSharedPreferences(context).edit().clear().commit()
         AppPreference.init(context)
+        ReflectionHelpers.setField(it, "runtimeInputSharedPreferences",
+            PreferenceManager.getDefaultSharedPreferences(context))
         it.appPreference = AppPreference
         doReturn(editor).`when`(it).getCurrentInputConnection()
         ReflectionHelpers.callInstanceMethod<Unit>(it, "attachBaseContext",

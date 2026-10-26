@@ -1,5 +1,6 @@
 package com.kazumaproject.markdownhelperkeyboard
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.os.Bundle
 import android.os.Build
@@ -16,6 +17,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.annotation.RequiresApi
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -28,6 +30,8 @@ class FastInputHostActivity : Activity() {
     var cursorAnchorRequests = 0
         private set
 
+    // This platform Activity intentionally probes the platform EditText input connection.
+    @SuppressLint("AppCompatCustomView")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -147,6 +151,7 @@ class FastInputHostActivity : Activity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
     private class PlainSurroundingConnection(connection: InputConnection) : InputConnectionWrapper(connection, false) {
         override fun getSurroundingText(beforeLength: Int, afterLength: Int, flags: Int): android.view.inputmethod.SurroundingText? =
             super.getSurroundingText(beforeLength, afterLength, flags)?.let {
