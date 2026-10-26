@@ -39,11 +39,13 @@ class FloatingDictionaryInputTargetTest {
     private val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
     private val appEditor = EditText(context).apply { setText("background"); setSelection(length()) }
     private val appConnection = appEditor.onCreateInputConnection(EditorInfo())
-    private val service = spy(IMEService()).also { service ->
+    // Lazy delegates keep their original receiver when Mockito copies the service.
+    private val service = spy(IMEService().apply {
+        ReflectionHelpers.setField(this, "runtimeInputSharedPreferences",
+            PreferenceManager.getDefaultSharedPreferences(context))
+    }).also { service ->
         ReflectionHelpers.callInstanceMethod<Unit>(service, "attachBaseContext",
             ClassParameter.from(Context::class.java, context))
-        ReflectionHelpers.setField(service, "runtimeInputSharedPreferences",
-            PreferenceManager.getDefaultSharedPreferences(context))
         service.zenzRuntimeClient = mock()
         service.appPreference = mock<AppPreference>().apply {
             whenever(undo_enable_preference).thenReturn(true)
