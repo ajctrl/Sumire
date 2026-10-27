@@ -9,10 +9,13 @@
         android:id="@+id/keyboard_setting_constraint"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="16dp">
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp">
 
         <com.google.android.material.textview.MaterialTextView
             android:id="@+id/keyboard_position_title"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/keyboard_position_title"
@@ -21,6 +24,8 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/keyboard_position_button"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
             android:layout_width="0dp"
             android:layout_height="64dp"
             android:layout_marginTop="8dp"
@@ -31,6 +36,8 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/reset_layout_button"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
             style="?attr/materialButtonOutlinedStyle"
             android:layout_width="0dp"
             android:layout_height="64dp"
@@ -42,6 +49,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/tenkey_tooltip_button"
+            android:layout_marginStart="16dp"
             style="?attr/materialButtonOutlinedStyle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -54,6 +62,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/qwerty_tooltip_button"
+            android:layout_marginEnd="16dp"
             style="?attr/materialButtonOutlinedStyle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -116,7 +125,6 @@
             android:layout_width="24dp"
             android:layout_height="48dp"
             android:background="@drawable/resize_handle"
-            android:translationX="-12dp"
             app:layout_constraintBottom_toBottomOf="@id/keyboard_container"
             app:layout_constraintStart_toStartOf="@id/keyboard_container"
             app:layout_constraintTop_toTopOf="@id/keyboard_container" />
@@ -126,7 +134,6 @@
             android:layout_width="24dp"
             android:layout_height="48dp"
             android:background="@drawable/resize_handle"
-            android:translationX="12dp"
             app:layout_constraintBottom_toBottomOf="@id/keyboard_container"
             app:layout_constraintEnd_toEndOf="@id/keyboard_container"
             app:layout_constraintTop_toTopOf="@id/keyboard_container" />

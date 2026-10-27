@@ -44,7 +44,13 @@ class CustomDirectInputTransitionTest {
     }
 
     private val editor = Editor()
-    private val service = spy(IMEService().apply { appPreference = AppPreference }).also {
+    // Initialize the original receiver captured by lazy delegates before Mockito copies it.
+    private val service = spy(IMEService().apply {
+        appPreference = AppPreference
+        ReflectionHelpers.setField(this, "runtimeInputSharedPreferences",
+            PreferenceManager.getDefaultSharedPreferences(
+                ApplicationProvider.getApplicationContext<Context>()))
+    }).also {
         val context = ApplicationProvider.getApplicationContext<Context>()
         PreferenceManager.getDefaultSharedPreferences(context).edit().clear().commit()
         AppPreference.init(context)

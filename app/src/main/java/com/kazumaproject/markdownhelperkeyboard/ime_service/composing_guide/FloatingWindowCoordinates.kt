@@ -26,12 +26,12 @@ internal class FloatingWindowCoordinates(private val manager: WindowManager) {
         val cutout = if (Build.VERSION.SDK_INT >= 28) {
             insets?.displayCutout?.let {
                 Rect(it.safeInsetLeft, it.safeInsetTop, it.safeInsetRight, it.safeInsetBottom)
-            } ?: Rect()
-        } else Rect()
-        val safe = Rect(maxOf(insets?.stableInsetLeft ?: 0, cutout.left),
-            maxOf(insets?.stableInsetTop ?: 0, cutout.top),
-            size.x - maxOf(insets?.stableInsetRight ?: 0, cutout.right),
-            size.y - maxOf(insets?.stableInsetBottom ?: 0, cutout.bottom))
+            }
+        } else null
+        val safe = Rect(maxOf(insets?.stableInsetLeft ?: 0, cutout?.left ?: 0),
+            maxOf(insets?.stableInsetTop ?: 0, cutout?.top ?: 0),
+            size.x - maxOf(insets?.stableInsetRight ?: 0, cutout?.right ?: 0),
+            size.y - maxOf(insets?.stableInsetBottom ?: 0, cutout?.bottom ?: 0))
         // Old IME decor can report zero stable insets while its visible display frame
         // correctly excludes a side navigation bar. Keep panels out of that system UI.
         val visible = Rect().also(anchor::getWindowVisibleDisplayFrame)

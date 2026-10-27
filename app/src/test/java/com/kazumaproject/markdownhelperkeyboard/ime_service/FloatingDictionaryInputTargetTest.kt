@@ -6,6 +6,7 @@ import android.os.Looper
 import android.widget.EditText
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.FloatingCandidateListAdapter
 import com.kazumaproject.markdownhelperkeyboard.ime_service.floating_dictionary.FloatingDictionaryEditText
@@ -38,7 +39,11 @@ class FloatingDictionaryInputTargetTest {
     private val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
     private val appEditor = EditText(context).apply { setText("background"); setSelection(length()) }
     private val appConnection = appEditor.onCreateInputConnection(EditorInfo())
-    private val service = spy(IMEService()).also { service ->
+    // Lazy delegates keep their original receiver when Mockito copies the service.
+    private val service = spy(IMEService().apply {
+        ReflectionHelpers.setField(this, "runtimeInputSharedPreferences",
+            PreferenceManager.getDefaultSharedPreferences(context))
+    }).also { service ->
         ReflectionHelpers.callInstanceMethod<Unit>(service, "attachBaseContext",
             ClassParameter.from(Context::class.java, context))
         service.zenzRuntimeClient = mock()

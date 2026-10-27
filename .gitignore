@@ -40,3 +40,7 @@ output.json
 
 # Python workflow tests
 __pycache__/
+# Download cache for the pinned dictionary import tool.
+.cache/classified-distribution/
+
+tools/classified-dictionaries/__pycache__/

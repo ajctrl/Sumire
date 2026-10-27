@@ -23,7 +23,9 @@ object SettingTabRegistry {
     const val TAB_CONVERSION_ENGINE = "conversion_engine"
     const val TAB_DICTIONARY = "dictionary"
     const val TAB_TEXT_MACRO = "text_macro"
+    const val TAB_VOICE_INPUT = "voice_input"
     const val TAB_KANA = "kana"
+    const val TAB_GOJUON = "gojuon"
     const val TAB_QWERTY = "qwerty"
     const val TAB_QWERTY_ENGLISH = "qwerty_english"
     const val TAB_QWERTY_ROMAJI = "qwerty_romaji"
@@ -96,11 +98,25 @@ object SettingTabRegistry {
                 fragmentFactory = { TextMacroFragment() },
             ),
             SettingTabSpec(
+                key = TAB_VOICE_INPUT,
+                title = { it.getString(R.string.setting_category_voice_input_title) },
+                xmlRes = R.xml.pref_voice_input,
+                destinationId = R.id.voiceInputPreferenceFragment,
+                fragmentFactory = { VoiceInputPreferenceFragment() },
+            ),
+            SettingTabSpec(
                 key = TAB_KANA,
                 title = { context -> context.getString(R.string.category_kana) },
                 xmlRes = R.xml.pref_kana,
                 destinationId = R.id.kanaPreferenceFragment,
                 fragmentFactory = { KanaPreferenceFragment() },
+            ),
+            SettingTabSpec(
+                key = TAB_GOJUON,
+                title = { it.getString(R.string.gojuon_settings_tab) },
+                xmlRes = R.xml.pref_gojuon,
+                destinationId = R.id.gojuonPreferenceFragment,
+                fragmentFactory = { GojuonPreferenceFragment() },
             ),
             SettingTabSpec(
                 key = TAB_QWERTY,

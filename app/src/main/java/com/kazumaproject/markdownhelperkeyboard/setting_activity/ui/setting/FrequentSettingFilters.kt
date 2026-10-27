@@ -18,6 +18,7 @@ internal object FrequentSettingFilters {
         val desiredCategories = listOf(
             SettingCategory.KEYBOARD_DISPLAY,
             SettingCategory.INPUT_METHOD,
+            SettingCategory.VOICE_INPUT,
             SettingCategory.CANDIDATE_CONVERSION,
             SettingCategory.CONVERSION_ENGINE,
             SettingCategory.DICTIONARY,
@@ -73,6 +74,8 @@ internal object FrequentSettingFilters {
             R.id.inputMethodPreferenceFragment,
             R.id.keyboardSelectionFragment,
             R.id.kanaPreferenceFragment,
+            R.id.gojuonPreferenceFragment,
+            R.id.gojuonSizeSettingsFragment,
             R.id.qwertyPreferenceFragment,
             R.id.qwertyEnglishPreferenceFragment,
             R.id.qwertyRomajiPreferenceFragment,
@@ -92,6 +95,8 @@ internal object FrequentSettingFilters {
             R.id.circularSlotActionSettingFragment,
             R.id.sumireSpecialKeyEditorFragment,
                 -> SettingCategory.INPUT_METHOD
+
+            R.id.voiceInputPreferenceFragment -> SettingCategory.VOICE_INPUT
 
             R.id.candidateConversionPreferenceFragment,
             R.id.candidateTabOrderFragment,
