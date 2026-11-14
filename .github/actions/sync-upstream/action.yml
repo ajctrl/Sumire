@@ -1,0 +1,5 @@
+name: Sync upstream with resumable API repairs
+description: Run trusted sync code with the Actions artifact runtime credentials.
+runs:
+  using: node24
+  main: index.cjs

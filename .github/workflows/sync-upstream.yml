@@ -1,61 +1,55 @@
-name: Sync upstream release
+name: Validate and publish upstream update
 
 on:
-  schedule:
-    - cron: '23 3 * * *'
-  workflow_dispatch:
+  workflow_run:
+    workflows: [Sync upstream release]
+    types: [completed]
+    branches: [dev]
 
 permissions:
   contents: read
 
 concurrency:
-  group: sync-upstream-release
+  group: sync-upstream-completion
   cancel-in-progress: false
 
 jobs:
   prepare:
-    if: github.repository == 'ajctrl/Sumire' && github.ref == 'refs/heads/dev'
+    # Only the dedicated trusted producer can supply plans or repair checkpoints.
+    if: >-
+      github.repository == 'ajctrl/Sumire' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.path == '.github/workflows/prepare-upstream-sync.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'dev' &&
+      contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event.workflow_run.event)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
-      contents: write
-      pull-requests: write
+      actions: read
+      contents: read
     outputs:
-      changed: ${{ steps.sync.outputs.changed }}
-      head: ${{ steps.sync.outputs.head }}
-      base: ${{ steps.sync.outputs.base }}
-      pr: ${{ steps.sync.outputs.pr }}
+      changed: ${{ steps.plan.outputs.changed }}
+      paused: ${{ steps.plan.outputs.paused }}
+      head: ${{ steps.plan.outputs.head }}
+      base: ${{ steps.plan.outputs.base }}
+      pr: ${{ steps.plan.outputs.pr }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: dev
-          fetch-depth: 0
-      - name: API budget day (UTC)
-        id: budget
-        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
-      - name: Restore API budget reservations
-        uses: actions/cache/restore@v4
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
         with:
-          path: ${{ runner.temp }}/sumire-openai-budget.json
-          key: sumire-openai-budget-v1-${{ steps.budget.outputs.day }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            sumire-openai-budget-v1-${{ steps.budget.outputs.day }}-
-      - name: Prepare update PR
-        id: sync
+          name: sumire-sync-plan-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ${{ runner.temp }}/sync-plan
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Read prepared update
+        id: plan
         env:
-          GH_TOKEN: ${{ github.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
-          OPENAI_DAILY_TOKEN_BUDGET: ${{ vars.OPENAI_DAILY_TOKEN_BUDGET || '200000' }}
-          OPENAI_BUDGET_FILE: ${{ runner.temp }}/sumire-openai-budget.json
-          OPENAI_BUDGET_DAY: ${{ steps.budget.outputs.day }}
-        run: python3 .github/scripts/sync-upstream.py
-      - name: Save API budget reservations, including failed requests
-        if: ${{ always() && steps.budget.outcome == 'success' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/sumire-openai-budget.json
-          key: sumire-openai-budget-v1-${{ steps.budget.outputs.day }}-${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: python3 .github/scripts/sync-plan.py read "$RUNNER_TEMP/sync-plan/sync-plan.json"
 
   validate:
     needs: prepare
@@ -107,6 +101,7 @@ jobs:
     # Also retry an unpublished release when upstream has no newer version.
     if: >-
       ${{ !cancelled() && needs.prepare.result == 'success' &&
+          needs.prepare.outputs.paused != 'true' &&
           (needs.prepare.outputs.changed == 'false' || needs.merge.result == 'success') }}
     permissions:
       contents: write

@@ -1,0 +1,71 @@
+name: Sync upstream release
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'ajctrl/Sumire' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      paused: ${{ steps.sync.outputs.paused }}
+      head: ${{ steps.sync.outputs.head }}
+      base: ${{ steps.sync.outputs.base }}
+      pr: ${{ steps.sync.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Install isolated Codex worker
+        run: |
+          sudo npm install --global --ignore-scripts --no-audit --no-fund @openai/codex@0.169.0
+          sudo useradd --system --create-home --shell /usr/sbin/nologin sumire-codex
+          chmod 700 "$HOME" "$GITHUB_WORKSPACE/.git"
+      - name: Install checkpoint client
+        run: npm install --prefix "$RUNNER_TEMP/sumire-artifact-client" --ignore-scripts --no-audit --no-fund @actions/artifact@2.3.2
+      - name: Prepare update PR
+        id: sync
+        uses: ./.github/actions/sync-upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUMIRE_CODEX_BIN: /usr/local/bin/codex
+          SUMIRE_CODEX_USER: sumire-codex
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
+          OPENAI_MODEL_CONTEXT_WINDOW: ${{ vars.OPENAI_MODEL_CONTEXT_WINDOW }}
+          OPENAI_MODEL_MAX_OUTPUT_TOKENS: ${{ vars.OPENAI_MODEL_MAX_OUTPUT_TOKENS }}
+          OPENAI_DAILY_TOKEN_BUDGET: ${{ vars.OPENAI_DAILY_TOKEN_BUDGET || '200000' }}
+          OPENAI_BUDGET_FILE: ${{ runner.temp }}/repair-state.json
+          SUMIRE_ARTIFACT_CLIENT: ${{ runner.temp }}/sumire-artifact-client/node_modules/@actions/artifact
+
+      - name: Record prepared update
+        env:
+          SYNC_CHANGED: ${{ steps.sync.outputs.changed }}
+          SYNC_PAUSED: ${{ steps.sync.outputs.paused }}
+          SYNC_BASE: ${{ steps.sync.outputs.base }}
+          SYNC_HEAD: ${{ steps.sync.outputs.head }}
+          SYNC_PR: ${{ steps.sync.outputs.pr }}
+        run: python3 .github/scripts/sync-plan.py write "$RUNNER_TEMP/sync-plan.json"
+      - name: Upload prepared update
+        uses: actions/upload-artifact@v4
+        with:
+          name: sumire-sync-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sync-plan.json
+          if-no-files-found: error
+          retention-days: 14
