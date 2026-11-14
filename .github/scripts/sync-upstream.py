@@ -13,10 +13,21 @@ UPSTREAM = "KazumaProject/JapaneseKeyboard"
 BASE = "dev"
 STATE = Path(".github/upstream.json")
 VERSION_FILE = "app/build.gradle"
+# A reviewed transition from the old release history to the new v1.7.150
+# history. Require the exact old checkpoint and a descendant of this new one.
+HISTORY_TRANSITIONS = {
+    "8528261c64dee373c922c010165d936cddc89640":
+        "b53f9f7133af3245b3d3ecec53784e19d38c7d7d",
+}
+PROTECTED = (".github",)
 spec = importlib.util.spec_from_file_location(
     "release_versions", Path(__file__).with_name("release-upstream.py"))
 release_versions = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release_versions)
+spec = importlib.util.spec_from_file_location(
+    "conflict_resolver", Path(__file__).with_name("resolve-upstream-conflicts.py"))
+conflict_resolver = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(conflict_resolver)
 
 
 def run(*args, check=True):
@@ -52,9 +63,22 @@ def output(**values):
             stream.write(f"{key}={value}\n")
 
 
-def merge_app_version(base, upstream, tag, previous_tag):
+def assert_history(previous, upstream, base, resolver):
+    git("merge-base", "--is-ancestor", previous, base)
+    result = run("git", "merge-base", "--is-ancestor", previous, upstream, check=False)
+    if result.returncode == 0:
+        return
+    checkpoint = HISTORY_TRANSITIONS.get(previous)
+    if result.returncode != 1 or not resolver.enabled or not checkpoint:
+        raise RuntimeError("Upstream release history diverged; an explicit history transition is required")
+    git("merge-base", "--is-ancestor", checkpoint, upstream)
+    print(f"Reconciling reviewed upstream history transition: {previous} -> {checkpoint}")
+    return previous
+
+
+def merge_app_version(base, upstream, tag, previous_tag, resolver=None, checkpoint=None):
     """Merge real Gradle changes normally, handling only release numbers specially."""
-    ancestor = git("merge-base", base, upstream)
+    ancestor = checkpoint or git("merge-base", base, upstream)
     original = git("show", f"{ancestor}:{VERSION_FILE}")
     ours = git("show", f"{base}:{VERSION_FILE}")
     theirs = git("show", f"{upstream}:{VERSION_FILE}")
@@ -71,11 +95,42 @@ def merge_app_version(base, upstream, tag, previous_tag):
         paths = [Path(directory) / name for name in ("ours", "base", "theirs")]
         for path, content in zip(paths, (ours, original, theirs)):
             path.write_text(content + "\n")
-        merged = run("git", "merge-file", "-p", *map(str, paths), check=False)
+        merged = run("git", "merge-file", "--diff3", "-p", *map(str, paths), check=False)
     if merged.returncode:
-        raise RuntimeError("Manual upstream merge required: app/build.gradle has non-version conflicts")
+        if merged.returncode > 0 and merged.returncode < 128 and resolver and resolver.enabled:
+            content = resolver.resolve(VERSION_FILE, merged.stdout)
+        else:
+            raise RuntimeError("Manual upstream merge required: app/build.gradle has non-version conflicts")
+    else:
+        content = merged.stdout
     return release_versions.replace_version_info(
-        merged.stdout, upstream_name, max(upstream_code, fork_code + 1))
+        content, upstream_name, max(upstream_code, fork_code + 1))
+
+
+def merge_upstream(base, upstream, checkpoint=None):
+    if checkpoint is None:
+        merged = run("git", "-c", "merge.conflictStyle=diff3", "merge",
+                     "--no-ff", "--no-commit", upstream, check=False)
+        return merged, git("diff", "--name-only", "--diff-filter=U").splitlines()
+    # Rewritten history shares an ancient Git ancestor. Use the exact upstream
+    # snapshot already incorporated into this fork as the three-way content
+    # base, rather than asking the model to merge years of duplicate history.
+    # The final commit still has the real fork and upstream commits as parents.
+    tree = run("git", "-c", "merge.conflictStyle=diff3", "merge-tree", "--write-tree",
+               f"--merge-base={checkpoint}", "--name-only", "--no-messages",
+               base, upstream, check=False)
+    if tree.returncode not in (0, 1):
+        raise RuntimeError(f"Cannot reconcile upstream history: {tree.stderr}")
+    lines = tree.stdout.splitlines()
+    if not lines or not re.fullmatch(r"[0-9a-f]{40}", lines[0]):
+        raise RuntimeError("Cannot identify reconciled upstream tree")
+    merged = run("git", "merge", "--strategy=ours", "--allow-unrelated-histories",
+                 "--no-ff", "--no-commit", upstream,
+                 check=False)
+    if merged.returncode:
+        raise RuntimeError(f"Cannot establish upstream merge parents: {merged.stderr}")
+    git("restore", f"--source={lines[0]}", "--staged", "--worktree", "--", ".")
+    return merged, [line for line in lines[1:] if line]
 
 
 def main():
@@ -99,49 +154,67 @@ def main():
     git("fetch", "--no-tags", f"https://github.com/{UPSTREAM}.git",
         f"refs/tags/{tag}")
     upstream = git("rev-parse", "FETCH_HEAD^{commit}")
-    # Reject rewritten/divergent release history instead of attempting a reset.
-    git("merge-base", "--is-ancestor", state["commit"], upstream)
-    git("merge-base", "--is-ancestor", state["commit"], base)
-    merged_gradle = merge_app_version(base, upstream, tag, state["tag"])
+    resolver = conflict_resolver.Resolver()
+    checkpoint = assert_history(state["commit"], upstream, base, resolver)
     branch = f"upstream/{tag}-{base[:12]}"
-    git("switch", "-c", branch)
-    git("config", "user.name", "github-actions[bot]")
-    git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-    merged = run("git", "merge", "--no-ff", "--no-commit", upstream, check=False)
-    conflicts = git("diff", "--name-only", "--diff-filter=U").splitlines()
-    if merged.returncode and (not conflicts or any(p != VERSION_FILE for p in conflicts)):
-        git("merge", "--abort")
-        raise RuntimeError(f"Manual upstream merge required:\n{conflicts}\n{merged.stderr}")
-    Path(VERSION_FILE).write_text(merged_gradle)
-    git("add", VERSION_FILE)
-    # Never automatically change the code that grants approval to an update.
-    protected = [".github/workflows/sync-upstream.yml",
-                 ".github/workflows/android.yml",
-                 ".github/workflows/fork-validation.yml",
-                 ".github/scripts/release-upstream.py",
-                 ".github/scripts/verify-release-apks.py",
-                 ".github/scripts/sync-upstream.py",
-                 ".github/scripts/check-fork-invariants.py",
-                 ".github/scripts/tests", str(STATE)]
-    if git("diff", "HEAD", "--", *protected):
-        git("merge", "--abort")
-        raise RuntimeError("Update changes fork automation; manual review required")
-    run("python3", ".github/scripts/check-fork-invariants.py")
-    STATE.write_text(json.dumps({"repository": UPSTREAM, "tag": tag,
-                                "commit": upstream}, indent=2) + "\n")
-    git("add", str(STATE))
-    git("commit", "-m", f"Merge upstream {tag}")
-    head = git("rev-parse", "HEAD")
+    next_state = {"repository": UPSTREAM, "tag": tag, "commit": upstream}
     existing = git("ls-remote", "--heads", "origin", f"refs/heads/{branch}")
     if existing:
-        # A failed validation can be retried without force-pushing or duplicating PRs.
+        # Reuse the exact candidate: AI output can differ between requests.
+        # Validate its parents, checkpoint and trusted automation before checkout.
         git("fetch", "--no-tags", "origin", f"refs/heads/{branch}")
         previous = git("rev-parse", "FETCH_HEAD")
-        if (git("rev-parse", f"{previous}^{{tree}}") != git("rev-parse", "HEAD^{tree}")
-                or git("show", "-s", "--format=%P", previous) != f"{base} {upstream}"):
+        if (git("show", "-s", "--format=%P", previous) != f"{base} {upstream}"
+                or f"Sumire-Sync-Tree: {git('rev-parse', previous + '^{tree}')}" not in
+                git("show", "-s", "--format=%B", previous).splitlines()
+                or json.loads(git("show", f"{previous}:{STATE}")) != next_state
+                or git("diff", base, previous, "--", ".github", ":(exclude).github/upstream.json")):
             raise RuntimeError("Existing update branch was modified; manual review required")
+        git("switch", "-c", branch, previous)
+        run("python3", ".github/scripts/check-fork-invariants.py")
         head = previous
     else:
+        merged_gradle = merge_app_version(base, upstream, tag, state["tag"], resolver, checkpoint)
+        git("switch", "-c", branch)
+        git("config", "user.name", "github-actions[bot]")
+        git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+        try:
+            merged, conflicts = merge_upstream(base, upstream, checkpoint)
+            if merged.returncode and not conflicts:
+                raise RuntimeError(f"Upstream merge failed: {merged.stderr}")
+            # The model never edits approval, validation or release automation.
+            # In API mode keep this fork's entire .github tree, including paths
+            # added/deleted upstream. This also resolves automation conflicts.
+            if resolver.enabled:
+                git("restore", f"--source={base}", "--staged", "--worktree", "--", *PROTECTED)
+            elif any(p.startswith(".github/") for p in conflicts):
+                raise RuntimeError(f"Update changes fork automation; manual review required: {conflicts}")
+            Path(VERSION_FILE).write_text(merged_gradle)
+            git("add", "--", VERSION_FILE)
+            conflicts = [p for p in conflicts if p != VERSION_FILE and
+                         not (resolver.enabled and p.startswith(".github/"))]
+            if conflicts and not resolver.enabled:
+                raise RuntimeError(f"Manual upstream merge required:\n{conflicts}")
+            for path in conflicts:
+                file = Path(path)
+                modes = git("ls-files", "--stage", "--", path).splitlines()
+                if (not modes or any(line.split()[0] != "100644" for line in modes)
+                        or not file.is_file() or file.is_symlink()):
+                    raise RuntimeError(f"Unsupported conflict type: {path}")
+                file.write_text(resolver.resolve(path, file.read_text()))
+                git("add", "--", path)
+            if git("diff", "HEAD", "--", *PROTECTED):
+                raise RuntimeError("Update changes fork automation; manual review required")
+            run("python3", ".github/scripts/check-fork-invariants.py")
+            STATE.write_text(json.dumps(next_state, indent=2) + "\n")
+            git("add", "--", str(STATE))
+            git("commit", "-m", f"Merge upstream {tag}", "-m",
+                f"Sumire-Sync-Tree: {git('write-tree')}")
+        except Exception:
+            if run("git", "rev-parse", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+                git("merge", "--abort")
+            raise
+        head = git("rev-parse", "HEAD")
         git("push", "origin", f"HEAD:refs/heads/{branch}")
     pulls = api(f"repos/{repo}/pulls?state=all&base={BASE}&head={repo.split('/')[0]}:{branch}")
     if pulls:

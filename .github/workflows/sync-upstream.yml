@@ -16,7 +16,7 @@ jobs:
   prepare:
     if: github.repository == 'ajctrl/Sumire' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -30,11 +30,32 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
+      - name: API budget day (UTC)
+        id: budget
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Restore API budget reservations
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/sumire-openai-budget.json
+          key: sumire-openai-budget-v1-${{ steps.budget.outputs.day }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            sumire-openai-budget-v1-${{ steps.budget.outputs.day }}-
       - name: Prepare update PR
         id: sync
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
+          OPENAI_DAILY_TOKEN_BUDGET: ${{ vars.OPENAI_DAILY_TOKEN_BUDGET || '200000' }}
+          OPENAI_BUDGET_FILE: ${{ runner.temp }}/sumire-openai-budget.json
+          OPENAI_BUDGET_DAY: ${{ steps.budget.outputs.day }}
         run: python3 .github/scripts/sync-upstream.py
+      - name: Save API budget reservations, including failed requests
+        if: ${{ always() && steps.budget.outcome == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/sumire-openai-budget.json
+          key: sumire-openai-budget-v1-${{ steps.budget.outputs.day }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   validate:
     needs: prepare

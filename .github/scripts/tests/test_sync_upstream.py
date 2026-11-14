@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "sync-upstream.py"
@@ -67,7 +67,7 @@ class MergeTests(unittest.TestCase):
         self.git("push", "origin", "dev")
         self.base = self.git("rev-parse", "HEAD")
         self.env = patch.dict(os.environ, GITHUB_REPOSITORY="ajctrl/Sumire",
-                              GITHUB_OUTPUT=str(self.root / "outputs"))
+                              GITHUB_OUTPUT=str(self.root / "outputs"), OPENAI_API_KEY="")
         self.env.start()
         self.addCleanup(self.env.stop)
         self.real_run = sync.run
@@ -167,6 +167,125 @@ class MergeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "manual review required"):
             self.invoke()
         self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
+
+    def test_api_resolves_code_conflict_and_retry_reuses_exact_candidate(self):
+        Path("feature.txt").write_text("fork change\n")
+        self.commit("fork change")
+        self.git("push", "origin", "dev")
+        base = self.git("rev-parse", "HEAD")
+        client = Mock(enabled=True)
+        client.resolve.return_value = "fork and upstream combined\n"
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+            first = self.git("rev-parse", "HEAD")
+            branch = self.git("branch", "--show-current")
+            self.assertEqual(Path("feature.txt").read_text(), "fork and upstream combined\n")
+            self.assertEqual(self.git("show", "-s", "--format=%P", first),
+                             f"{base} {self.target}")
+            self.git("switch", "dev")
+            self.git("branch", "-D", branch)
+            self.invoke([{"number": 42, "state": "open"}])
+        client.resolve.assert_called_once()
+        self.assertEqual(self.git("rev-parse", "HEAD"), first)
+
+    def test_api_failure_aborts_merge_without_pushing_a_candidate(self):
+        Path("feature.txt").write_text("fork conflict\n")
+        self.commit("fork change")
+        self.git("push", "origin", "dev")
+        before = self.git("rev-parse", "HEAD")
+        client = Mock(enabled=True)
+        client.resolve.side_effect = RuntimeError("budget exhausted")
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            with self.assertRaisesRegex(RuntimeError, "budget exhausted"):
+                self.invoke()
+        self.assertEqual(self.git("rev-parse", "HEAD"), before)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertFalse((self.root / "outputs").exists())
+        self.assertEqual(self.git("ls-remote", "--heads", "origin", "refs/heads/upstream/*"), "")
+
+    def test_api_mode_retains_automation_instead_of_sending_it_to_model(self):
+        os.chdir(self.root / "upstream")
+        Path(".github/workflows").mkdir(parents=True)
+        Path(".github/workflows/android.yml").write_text("upstream release policy\n")
+        self.commit("change release workflow")
+        self.git("tag", "-f", "v1.7.129")
+        os.chdir(self.root / "fork")
+        client = Mock(enabled=True)
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+        client.resolve.assert_not_called()
+        self.assertFalse(Path(".github/workflows/android.yml").exists())
+
+    def test_api_gradle_resolution_still_uses_release_version_and_increasing_code(self):
+        os.chdir(self.root / "upstream")
+        gradle = Path("app/build.gradle")
+        gradle.write_text(gradle.read_text().replace("android {", "android { // upstream"))
+        self.commit("upstream configuration")
+        self.git("tag", "-f", "v1.7.129")
+        os.chdir(self.root / "fork")
+        gradle.write_text('android { // fork\n    versionName "1.7.128.2"\n'
+                          '    versionCode 830\n}\n')
+        self.commit("fork configuration and manual version")
+        self.git("push", "origin", "dev")
+        client = Mock(enabled=True)
+        client.resolve.return_value = ('android { // combined\n    versionName "1.7.128"\n'
+                                       '    versionCode 821\n}\n')
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+        client.resolve.assert_called_once()
+        self.assertEqual(client.resolve.call_args.args[0], "app/build.gradle")
+        self.assertEqual(sync.release_versions.version_info(gradle.read_text()), ("1.7.129", 831))
+        self.assertIn("// combined", gradle.read_text())
+
+    def test_only_explicit_history_transition_is_accepted(self):
+        self.git("fetch", str(self.root / "upstream"), "dev")
+        client = Mock(enabled=True)
+        # The target is not an ancestor of the old checkpoint (initial).
+        with patch.dict(sync.HISTORY_TRANSITIONS, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "history diverged"):
+                sync.assert_history(self.target, self.initial, self.target, client)
+        with patch.dict(sync.HISTORY_TRANSITIONS, {self.target: self.initial}, clear=True):
+            sync.assert_history(self.target, self.initial, self.target, client)
+            client.enabled = False
+            with self.assertRaisesRegex(RuntimeError, "history diverged"):
+                sync.assert_history(self.target, self.initial, self.target, client)
+
+    def test_modified_candidate_is_rejected_before_reuse(self):
+        self.invoke()
+        branch = self.git("branch", "--show-current")
+        Path("feature.txt").write_text("changed outside automation\n")
+        self.git("add", ".")
+        self.git("commit", "--amend", "--no-edit")
+        self.git("push", "--force", "origin", branch)  # Isolated local test remote.
+        self.git("switch", "dev")
+        self.git("branch", "-D", branch)
+        with self.assertRaisesRegex(RuntimeError, "Existing update branch was modified"):
+            self.invoke()
+
+    def test_reviewed_rewrite_uses_previous_snapshot_and_keeps_both_histories(self):
+        os.chdir(self.root / "upstream")
+        tree = self.git("rev-parse", self.target + "^{tree}")
+        rewritten = self.git("commit-tree", tree, "-m", "rewritten upstream release")
+        self.git("tag", "-f", "v1.7.129", rewritten)
+        os.chdir(self.root / "fork")
+        Path("feature.txt").write_text("fork change\n")
+        self.commit("fork change")
+        self.git("push", "origin", "dev")
+        base = self.git("rev-parse", "HEAD")
+        client = Mock(enabled=True)
+        client.resolve.return_value = "fork and new upstream combined\n"
+        with patch.dict(sync.HISTORY_TRANSITIONS, {self.initial: rewritten}, clear=True), \
+                patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+        client.resolve.assert_called_once()
+        self.assertEqual(Path("feature.txt").read_text(), "fork and new upstream combined\n")
+        self.assertEqual(Path("fork.txt").read_text(), "keep me\n")
+        self.assertEqual(self.git("show", "-s", "--format=%P", "HEAD"), f"{base} {rewritten}")
+        self.git("merge-base", "--is-ancestor", self.initial, "HEAD")
+        self.git("merge-base", "--is-ancestor", rewritten, "HEAD")
+        self.assertEqual(sync.release_versions.version_info(Path("app/build.gradle").read_text()),
+                         ("1.7.129", 822))
+        self.assertEqual(json.loads(Path(".github/upstream.json").read_text())["commit"], rewritten)
 
 
 if __name__ == "__main__":
