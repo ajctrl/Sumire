@@ -116,7 +116,7 @@ class Resolver:
                      available - input_tokens - TOKEN_MARGIN)
         if output < MIN_OUTPUT_TOKENS:
             if min(context, self.limit) - input_tokens - TOKEN_MARGIN < MIN_OUTPUT_TOKENS:
-                raise RuntimeError("Input cannot fit model context or daily allowance; manual review required")
+                raise policy.ReviewRequired("Input cannot fit model context or daily allowance; human review required")
             raise BudgetPaused("Daily allowance reached; saved repairs can be resumed after UTC 00:00")
         return output
 

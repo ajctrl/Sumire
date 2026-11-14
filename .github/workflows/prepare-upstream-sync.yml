@@ -22,6 +22,8 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
+      review_required: ${{ steps.sync.outputs.review_required }}
+      full_validation: ${{ steps.sync.outputs.full_validation }}
       changed: ${{ steps.sync.outputs.changed }}
       paused: ${{ steps.sync.outputs.paused }}
       head: ${{ steps.sync.outputs.head }}
@@ -56,6 +58,8 @@ jobs:
 
       - name: Record prepared update
         env:
+          SYNC_REVIEW_REQUIRED: ${{ steps.sync.outputs.review_required }}
+          SYNC_FULL_VALIDATION: ${{ steps.sync.outputs.full_validation }}
           SYNC_CHANGED: ${{ steps.sync.outputs.changed }}
           SYNC_PAUSED: ${{ steps.sync.outputs.paused }}
           SYNC_BASE: ${{ steps.sync.outputs.base }}
@@ -67,5 +71,13 @@ jobs:
         with:
           name: sumire-sync-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/sync-plan.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save human review evidence
+        if: steps.sync.outputs.review_required == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/upstream-review/
           if-no-files-found: error
           retention-days: 14

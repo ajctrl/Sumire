@@ -23,6 +23,13 @@ spec = importlib.util.spec_from_file_location(
 conflict_resolver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(conflict_resolver)
 
+spec = importlib.util.spec_from_file_location("upstream_review", Path(__file__).with_name("upstream-review.py"))
+upstream_review = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upstream_review)
+spec = importlib.util.spec_from_file_location("validation_scope", Path(__file__).with_name("validation-scope.py"))
+validation_scope = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validation_scope)
+
 
 def run(*args, check=True):
     return subprocess.run(args, text=True, stdout=subprocess.PIPE,
@@ -52,6 +59,7 @@ def release_tag(release, current):
 
 
 def output(**values):
+    values = {"review_required": "false", "full_validation": "false", **values}
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         for key, value in values.items():
             stream.write(f"{key}={value}\n")
@@ -61,7 +69,7 @@ def assert_history(previous, upstream, base):
     git("merge-base", "--is-ancestor", previous, base)
     result = run("git", "merge-base", "--is-ancestor", previous, upstream, check=False)
     if result.returncode:
-        raise RuntimeError("Manual review required: upstream release history diverged; API repair is not allowed")
+        raise conflict_resolver.policy.ReviewRequired("Upstream release history diverged; human review required")
 
 
 def merge_app_version(base, upstream, tag, previous_tag, allow_conflicts=False):
@@ -108,14 +116,14 @@ def prepare_conflicts(conflicts):
                 {line.split()[2] for line in modes} not in ({"1", "2", "3"}, {"2", "3"}) or
                 any(line.split()[0] not in ("100644", "100755") for line in modes)
                 or not file.is_file() or file.is_symlink()):
-            raise RuntimeError(f"Manual review required: unsupported conflict type: {path}")
+            raise conflict_resolver.policy.ReviewRequired(f"Unsupported conflict type: {path}")
         content = file.read_text()
         conflict_resolver.policy.check_conflict(path, content)
         prepared.append((path, content))
     return prepared
 
 
-def main():
+def prepare(context):
     repo = os.environ["GITHUB_REPOSITORY"]
     if repo != "ajctrl/Sumire":
         raise ValueError("This workflow is configured for ajctrl/Sumire")
@@ -136,6 +144,12 @@ def main():
     git("fetch", "--no-tags", f"https://github.com/{UPSTREAM}.git",
         f"refs/tags/{tag}")
     upstream = git("rev-parse", "FETCH_HEAD^{commit}")
+    context.update(repo=repo, base=base, upstream=upstream, tag=tag)
+    pending = upstream_review.find(repo, base, upstream)
+    if pending:
+        upstream_review.evidence(pending, base, upstream, pending.get("body") or "Review is pending")
+        review_outcome(context, pending["html_url"])
+        return
     resolver = conflict_resolver.Resolver(task=f"{repo}:{base}:{upstream}")
     assert_history(state["commit"], upstream, base)
     branch = f"upstream/{tag}-{base[:12]}"
@@ -153,7 +167,7 @@ def main():
                 git("show", "-s", "--format=%B", previous).splitlines()
                 or json.loads(git("show", f"{previous}:{STATE}")) != next_state
                 or git("diff", base, previous, "--", ".github", ":(exclude).github/upstream.json")):
-            raise RuntimeError("Existing update branch was modified; manual review required")
+            raise conflict_resolver.policy.ReviewRequired("Existing update branch was modified")
         git("switch", "-c", branch, previous)
         run("python3", ".github/scripts/check-fork-invariants.py")
         head = previous
@@ -168,7 +182,7 @@ def main():
                 raise RuntimeError(f"Upstream merge failed: {merged.stderr}")
             # Do not hide upstream policy changes by silently retaining ours.
             if any(p.startswith(".github/") for p in conflicts) or git("diff", "HEAD", "--", *PROTECTED):
-                raise RuntimeError("Update changes fork automation; manual review required")
+                raise conflict_resolver.policy.ReviewRequired("Update changes fork automation; manual review required")
             Path(VERSION_FILE).write_text(merged_gradle)
             conflicts = [p for p in conflicts if p != VERSION_FILE]
             if conflict_resolver.policy.HUNK.search(merged_gradle):
@@ -179,14 +193,18 @@ def main():
                 raise RuntimeError(f"Manual upstream merge required:\n{conflicts}")
             prepared = prepare_conflicts(conflicts)
             if prepared:
-                changed = resolver.repair_update(prepared)
+                overview = {"base": base, "upstream": upstream,
+                            "paths": git("diff", "--name-status", "HEAD", "--"),
+                            "statistics": git("diff", "--stat", "HEAD", "--"),
+                            "diff": git("diff", "--no-ext-diff", "HEAD", "--")}
+                changed = resolver.repair_update(prepared, overview=overview)
                 _, fork_code = release_versions.version_info(git("show", f"{base}:{VERSION_FILE}"))
                 name, upstream_code = release_versions.version_info(git("show", f"{upstream}:{VERSION_FILE}"))
                 Path(VERSION_FILE).write_text(release_versions.replace_version_info(
                     Path(VERSION_FILE).read_text(), name, max(upstream_code, fork_code + 1)))
                 git("add", "--all", "--", *changed, VERSION_FILE)
             if git("diff", "HEAD", "--", *PROTECTED):
-                raise RuntimeError("Update changes fork automation; manual review required")
+                raise conflict_resolver.policy.ReviewRequired("Update changes fork automation; manual review required")
             run("python3", ".github/scripts/check-fork-invariants.py")
             resolver.assess_update(git("diff", "--no-ext-diff", "HEAD", "--"))
             STATE.write_text(json.dumps(next_state, indent=2) + "\n")
@@ -206,9 +224,8 @@ def main():
                                   "No merge or release was started.\n")
             return
         except Exception as error:
-            if isinstance(error, conflict_resolver.policy.ReviewRequired) and os.environ.get("GITHUB_STEP_SUMMARY"):
-                with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                    summary.write("## Human review required\n\n" + str(error) + "\n\nNo merge or release was started.\n")
+            if isinstance(error, conflict_resolver.policy.ReviewRequired):
+                context["patch"] = git("diff", "--no-ext-diff", "HEAD", "--")
             if run("git", "rev-parse", "--verify", "MERGE_HEAD", check=False).returncode == 0:
                 git("merge", "--abort")
             raise
@@ -226,7 +243,8 @@ def main():
                 f"Upstream: `{upstream}`\nBase: `{base}`\n\n"
                 "The Validate and publish upstream update workflow runs the Lite debug build, all app unit tests, "
                 "Lint and fork invariant checks before merging this exact revision. "
-                "Full/native builds and device regression tests are not covered.\n\n"
+                "Full debug build, unit tests and Lint also run when native, build, dictionary or Full-specific paths change. "
+                "Device regression tests are not covered.\n\n"
                 "Use a merge commit to preserve upstream ancestry.\n")
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as file:
             file.write(body)
@@ -234,8 +252,29 @@ def main():
             run("gh", "pr", "create", "--repo", repo, "--base", BASE, "--head", branch,
                 "--title", f"Merge upstream {tag}", "--body-file", file.name)
         pr = api(f"repos/{repo}/pulls?state=open&base={BASE}&head={repo.split('/')[0]}:{branch}")[0]["number"]
-    output(changed="true", paused="false", head=head, base=base, pr=pr)
+    full = validation_scope.requires_full_revision(base, head)
+    output(changed="true", paused="false", head=head, base=base, pr=pr, full_validation=str(full).lower())
     print(f"Prepared https://github.com/{repo}/pull/{pr} at {head}")
+
+
+def review_outcome(context, url):
+    output(changed="false", paused="false", review_required="true", full_validation="false", base=context["base"])
+    print(f"::notice::Upstream update awaits human review: {url}")
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+            summary.write(f"## Human review required\n\n{url}\n\nNo merge or release was started.\n")
+
+
+def main():
+    context = {}
+    try:
+        prepare(context)
+    except conflict_resolver.policy.ReviewRequired as error:
+        if "upstream" not in context:
+            raise
+        issue = upstream_review.record(context["repo"], context["base"], context["upstream"],
+                                       context["tag"], str(error), context.get("patch", ""))
+        review_outcome(context, issue["html_url"])
 
 
 if __name__ == "__main__":

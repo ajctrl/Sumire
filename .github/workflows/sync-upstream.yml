@@ -28,6 +28,8 @@ jobs:
       actions: read
       contents: read
     outputs:
+      review_required: ${{ steps.plan.outputs.review_required }}
+      full_validation: ${{ steps.plan.outputs.full_validation }}
       changed: ${{ steps.plan.outputs.changed }}
       paused: ${{ steps.plan.outputs.paused }}
       head: ${{ steps.plan.outputs.head }}
@@ -53,16 +55,17 @@ jobs:
 
   validate:
     needs: prepare
-    if: needs.prepare.outputs.changed == 'true'
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/fork-validation.yml
     with:
       ref: ${{ needs.prepare.outputs.head }}
+      full: ${{ needs.prepare.outputs.full_validation == 'true' }}
 
   merge:
     needs: [prepare, validate]
-    if: needs.prepare.outputs.changed == 'true'
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -101,7 +104,7 @@ jobs:
     # Also retry an unpublished release when upstream has no newer version.
     if: >-
       ${{ !cancelled() && needs.prepare.result == 'success' &&
-          needs.prepare.outputs.paused != 'true' &&
+          needs.prepare.outputs.paused != 'true' && needs.prepare.outputs.review_required != 'true' &&
           (needs.prepare.outputs.changed == 'false' || needs.merge.result == 'success') }}
     permissions:
       contents: write

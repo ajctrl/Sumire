@@ -5,6 +5,10 @@ on:
     branches: [dev]
   workflow_call:
     inputs:
+      full:
+        description: Validate Full build, unit tests and lint before merging
+        type: boolean
+        default: false
       ref:
         required: true
         type: string
@@ -16,11 +20,31 @@ jobs:
   android:
     name: Lite build, tests and lint
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Select validation scope
+        id: scope
+        env:
+          REQUESTED_FULL: ${{ inputs.full && 'true' || 'false' }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -n "$PR_BASE" ]]; then
+            python3 .github/scripts/validation-scope.py --base "$PR_BASE" --head HEAD >> "$GITHUB_OUTPUT"
+          else
+            echo "full=$REQUESTED_FULL" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check out native submodules for Full validation
+        if: steps.scope.outputs.full == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 2
+          submodules: recursive
           persist-credentials: false
       - uses: actions/setup-java@v4
         with:
@@ -47,6 +71,15 @@ jobs:
       - name: Run Android Lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: ./gradlew :app:lintLiteStandardDebug --stacktrace --no-daemon --max-workers=2
+      - name: Build Full Debug
+        if: steps.scope.outputs.full == 'true'
+        run: ./gradlew :app:assembleFullStandardDebug --stacktrace --no-daemon --max-workers=1
+      - name: Run Full unit tests
+        if: steps.scope.outputs.full == 'true'
+        run: ./gradlew :app:testFullStandardDebugUnitTest --stacktrace --no-daemon --max-workers=1
+      - name: Run Full Lint
+        if: steps.scope.outputs.full == 'true'
+        run: ./gradlew :app:lintFullStandardDebug --stacktrace --no-daemon --max-workers=1
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
