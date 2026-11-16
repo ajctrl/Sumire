@@ -1,5 +1,6 @@
 package com.kazumaproject.custom_keyboard.view
 
+import com.kazumaproject.custom_keyboard.data.KeyboardLayoutOrigin
 import android.app.Activity
 import android.os.Looper
 import android.os.SystemClock
@@ -45,7 +46,7 @@ class FlickKeyboardViewLifecycleTest {
     @Test fun all54SumireLayoutsKeepEveryKeysTapAfterHideAndReuse() {
         for (mode in KeyboardInputMode.entries) {
             for (method in listOf("toggle", "flick", "switch-mode-effective")) {
-                for (style in listOf("default", "circle", "second-flick", "third-flick", "center-guide-flick", "sumire")) {
+                for (style in listOf("default", "circle", "second-flick", "center-guide-flick", "sumire")) {
                     val scenario = "$mode/$method/$style"
                     val layout = KeyboardDefaultLayouts.createFinalLayout(mode, emptyMap(), method, style)
                     install(layout)
@@ -58,7 +59,7 @@ class FlickKeyboardViewLifecycleTest {
                     idle(500)
                     assertTrue("$scenario emitted input while hidden", events.isEmpty())
                     keyboard.visibility = View.VISIBLE
-                    keyboard.setKeyboard(layout)
+                    keyboard.setKeyboard(layout, origin = KeyboardLayoutOrigin.BUILT_IN)
                     children.forEachIndexed { index, key -> assertSame(scenario, key, keyboard.getChildAt(index)) }
                     tapAllKeys()
                     assertEquals(scenario, expected, events)
@@ -87,7 +88,7 @@ class FlickKeyboardViewLifecycleTest {
     @Test fun all54SumireLayoutsKeepEveryKeysLongPressAfterHide() {
         for (mode in KeyboardInputMode.entries) {
             for (method in listOf("toggle", "flick", "switch-mode-effective")) {
-                for (style in listOf("default", "circle", "second-flick", "third-flick", "center-guide-flick", "sumire")) {
+                for (style in listOf("default", "circle", "second-flick", "center-guide-flick", "sumire")) {
                     val scenario = "$mode/$method/$style"
                     install(KeyboardDefaultLayouts.createFinalLayout(mode, emptyMap(), method, style))
                     holdAllKeys()
@@ -191,7 +192,7 @@ class FlickKeyboardViewLifecycleTest {
     private fun actionLayout(type: KeyType) = KeyboardLayout(
         listOf(KeyData("paste", 0, 0, false, KeyAction.Paste, keyId = "paste", keyType = type)),
         mapOf("paste" to listOf(mapOf(FlickDirection.TAP to FlickAction.Action(KeyAction.Paste)))), 1, 1)
-    private fun install(layout: KeyboardLayout) { keyboard.setKeyboard(layout); measure(); events.clear(); holds.clear() }
+    private fun install(layout: KeyboardLayout) { keyboard.setKeyboard(layout, origin = KeyboardLayoutOrigin.BUILT_IN); measure(); events.clear(); holds.clear() }
     private fun measure() {
         keyboard.measure(View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY))

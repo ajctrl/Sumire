@@ -3,7 +3,6 @@ package com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting
 import android.content.Context
 import android.os.Bundle
 import androidx.preference.Preference
-import androidx.preference.SeekBarPreference
 import androidx.preference.SwitchPreferenceCompat
 import com.kazumaproject.markdownhelperkeyboard.R
 import com.kazumaproject.markdownhelperkeyboard.setting_activity.AppPreference
@@ -48,40 +47,51 @@ class DictionaryPreferenceFragment : AsyncPreferenceFragment() {
         }
     }
 
+    private var categoryActions: DictionaryCategoryActions? = null
+
     override fun onPreferencesResumed() {
         if (store.currentRevision != preparedRevision) {
             reloadPreferences()
             return
         }
-        ClassifiedDictionaries.all.forEach { spec ->
-            findPreference<SwitchPreferenceCompat>(spec.preferenceKey)?.isChecked = store.isOptionalBundledEnabled(spec.category)
-        }
+        refreshDictionarySelections()
     }
 
     override fun onPreferencesReady(savedInstanceState: Bundle?, rootKey: String?) {
+
+        // Keep legacy keys available for saved highlight links, but give browsing its own screen.
+        val highlight = arguments?.getString(CommonPreferenceFragment.ARG_HIGHLIGHT_PREFERENCE_KEY)
+        findPreference<Preference>("classified_dictionaries")?.isVisible =
+            highlight == "classified_dictionaries" ||
+                highlight?.startsWith("optional_bundled_enabled_CLASSIFIED_") == true ||
+                highlight?.startsWith("classified_group_") == true
+        val manager = findPreference<Preference>("classified_dictionary_manager")
+            ?: Preference(requireContext()).apply {
+                key = "classified_dictionary_manager"
+                setTitle(R.string.classified_dictionary_settings_title)
+                order = -100
+                isIconSpaceReserved = false
+                preferenceScreen.addPreference(this)
+            }
+        manager.setOnPreferenceClickListener { navigateSafely(R.id.classifiedDictionarySettingsFragment); true }
 
         ClassifiedDictionaries.all.forEach { spec ->
             findPreference<SwitchPreferenceCompat>(spec.preferenceKey)?.apply {
                 isPersistent = false
                 isChecked = store.isOptionalBundledEnabled(spec.category)
                 setOnPreferenceChangeListener { _, value ->
-                    val enabled = value == true
-                    val problems = categoryProblems[spec.category].orEmpty()
-                    store.setDisableableCategoryEnabled(spec.category, enabled, problems.isEmpty())
-                    preparedRevision = store.currentRevision
-                    isChecked = enabled
-                    if (enabled && problems.isNotEmpty()) {
-                        MaterialAlertDialogBuilder(requireContext())
-                            .setTitle(R.string.external_dictionary_compat_dialog_title)
-                            .setMessage((listOf(getString(R.string.external_dictionary_compat_imported_but_not_usable),
-                                getString(R.string.external_dictionary_compat_import_matching_common_files)) +
-                                problems.map { getString(it.messageResId, *it.messageArgs.toTypedArray()) }).joinToString("\n"))
-                            .setPositiveButton(android.R.string.ok, null).show()
-                    }
+                    updateDictionarySelections(listOf(spec.category), value == true)
                     true
                 }
             }
         }
+
+        categoryActions = DictionaryCategoryActions(
+            preferenceScreen,
+            store::isOptionalBundledEnabled,
+            ::updateDictionarySelections,
+        ).also { it.bind() }
+        refreshDictionarySelections()
 
         val ngWordSwitchPreference =
             findPreference<SwitchPreferenceCompat>("ng_word_enable_preference")
@@ -142,39 +152,52 @@ class DictionaryPreferenceFragment : AsyncPreferenceFragment() {
             true
         }
 
-        val learnDictionaryPrefixSeekBar =
-            findPreference<SeekBarPreference>("learn_prediction_preference")
-        learnDictionaryPrefixSeekBar?.apply {
-            appPreference.learn_prediction_preference.let {
-                summary = resources.getString(R.string.learn_dictionary_prefix_match_summary, it)
-            }
-            setOnPreferenceChangeListener { _, newValue ->
-                summary =
-                    resources.getString(
-                        R.string.learn_dictionary_prefix_match_summary,
-                        newValue as Int
-                    )
-                true
-            }
+        findPreference<Preference>("setting_route_candidate_display")?.setOnPreferenceClickListener {
+            navigateSafely(R.id.candidateDisplayPreferenceFragment)
+            true
         }
-
-        val userDictionaryPrefixSeekBar =
-            findPreference<SeekBarPreference>("user_dictionary_prefix_match_number")
-        userDictionaryPrefixSeekBar?.apply {
-            appPreference.user_dictionary_prefix_match_number_preference?.let {
-                summary = resources.getString(R.string.user_dictionary_prefix_match_summary, it)
-            }
-            setOnPreferenceChangeListener { _, newValue ->
-                summary =
-                    resources.getString(
-                        R.string.user_dictionary_prefix_match_summary,
-                        newValue as Int
-                    )
-                true
-            }
-        }
-
+        bindCanonicalSettingLinks()
         applyLegacySearchResultFilterIfNeeded()
+        val targetKey = arguments?.getString(CommonPreferenceFragment.ARG_HIGHLIGHT_PREFERENCE_KEY)
+            ?.takeIf { it.isNotBlank() }
+            ?: arguments?.getString(LegacyPreferenceResultFilter.ARG_LEGACY_SEARCH_TARGET_KEY)
+        targetKey?.let { key ->
+            var parent = findPreference<Preference>(key)?.parent
+            while (parent != null) {
+                if (parent is CollapsiblePreferenceCategory) parent.setExpanded(true, persist = false)
+                parent = parent.parent
+            }
+        }
+    }
+
+    private fun refreshDictionarySelections() {
+        findPreference<Preference>("classified_dictionary_manager")?.summary = getString(
+            R.string.classified_group_enabled_count,
+            ClassifiedDictionaries.all.count { store.isOptionalBundledEnabled(it.category) },
+            ClassifiedDictionaries.all.size,
+        )
+        ClassifiedDictionaries.all.forEach { spec ->
+            findPreference<SwitchPreferenceCompat>(spec.preferenceKey)?.isChecked =
+                store.isOptionalBundledEnabled(spec.category)
+        }
+        categoryActions?.refresh()
+    }
+
+    private fun updateDictionarySelections(categories: List<DictionaryCategory>, enabled: Boolean) {
+        categories.forEach { category ->
+            store.setDisableableCategoryEnabled(category, enabled, categoryProblems[category].isNullOrEmpty())
+        }
+        preparedRevision = store.currentRevision
+        refreshDictionarySelections()
+        val problems = categories.flatMap { categoryProblems[it].orEmpty() }.distinct()
+        if (enabled && problems.isNotEmpty()) {
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.external_dictionary_compat_dialog_title)
+                .setMessage((listOf(getString(R.string.external_dictionary_compat_imported_but_not_usable),
+                    getString(R.string.external_dictionary_compat_import_matching_common_files)) +
+                    problems.map { getString(it.messageResId, *it.messageArgs.toTypedArray()) }).joinToString("\n"))
+                .setPositiveButton(android.R.string.ok, null).show()
+        }
     }
 
 }

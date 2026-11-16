@@ -9,9 +9,8 @@ import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.kazumaproject.core.domain.state.InputMode
 import com.kazumaproject.core.domain.state.TenKeyQWERTYMode
+import com.kazumaproject.custom_keyboard.data.KeyboardInputMode
 import com.kazumaproject.custom_keyboard.data.KeyboardLayout
-import com.kazumaproject.custom_keyboard.data.SumireFlickInputMode
-import com.kazumaproject.custom_keyboard.data.TfbiFlickNode
 import com.kazumaproject.custom_keyboard.data.TfbiFlickRotation
 import com.kazumaproject.custom_keyboard.layout.KeyboardDefaultLayouts
 import com.kazumaproject.custom_keyboard.view.TfbiFlickDirection
@@ -63,7 +62,8 @@ class IMEServiceSumireFlickRotationTest {
 
     @Test
     fun rotationPreferenceListenerUpdatesBothBuiltInTfbiStyles() {
-        for (style in listOf("second-flick", "third-flick")) {
+        for (style in listOf("second-flick")) {
+            AppPreference.sumire_keyboard_style = style
             ReflectionHelpers.setField(service, "sumireInputStyle", style)
             for ((rotation, direction) in listOf(
                 TfbiFlickRotation.DEFAULT to TfbiFlickDirection.DOWN_LEFT,
@@ -74,14 +74,8 @@ class IMEServiceSumireFlickRotationTest {
                 notifyPreferenceChanged()
                 val layout = ReflectionHelpers.callInstanceMethod<KeyboardLayout>(
                     service, "createSumireKeyboardLayout")
-                val input = if (style == "second-flick") {
-                    layout.twoStepFlickKeyMaps.getValue("か")
+                val input = layout.twoStepFlickKeyMaps.getValue("か")
                         .getValue(TfbiFlickDirection.LEFT).getValue(direction)
-                } else {
-                    val submenu = layout.hierarchicalFlickMaps.getValue("か")
-                        .normalMap.getValue(TfbiFlickDirection.LEFT) as TfbiFlickNode.SubMenu
-                    (submenu.nextMap.getValue(direction) as TfbiFlickNode.Input).char
-                }
                 assertEquals("$style $rotation", "ぎ", input)
             }
         }
@@ -89,6 +83,7 @@ class IMEServiceSumireFlickRotationTest {
 
     @Test
     fun unknownRestoredRotationReturnsRuntimeLayoutToDefault() {
+        AppPreference.sumire_keyboard_style = "second-flick"
         ReflectionHelpers.setField(service, "sumireInputStyle", "second-flick")
         AppPreference.sumire_flick_rotation_preference = TfbiFlickRotation.CLOCKWISE
         notifyPreferenceChanged()
@@ -100,41 +95,9 @@ class IMEServiceSumireFlickRotationTest {
             .getValue(TfbiFlickDirection.LEFT).getValue(TfbiFlickDirection.DOWN_LEFT))
     }
 
-    @Test
-    fun inputModePreferenceListenerSelectsContractedVoicedOrAllCharacters() {
-        ReflectionHelpers.setField(service, "sumireInputStyle", "third-flick")
-        for (mode in SumireFlickInputMode.entries) {
-            AppPreference.sumire_flick_input_mode_preference = mode
-            notifyPreferenceChanged(AppPreference.SUMIRE_FLICK_INPUT_MODE_KEY)
-            val layout = ReflectionHelpers.callInstanceMethod<KeyboardLayout>(
-                service, "createSumireKeyboardLayout")
-            val outputs = layout.hierarchicalFlickMaps.getValue("か").outputs()
-            assertTrue(outputs.containsAll(listOf("か", "き", "く", "け", "こ")))
-            assertEquals(mode != SumireFlickInputMode.CONTRACTED, "ぎ" in outputs)
-            assertEquals(mode != SumireFlickInputMode.VOICED, "きゅ" in outputs)
-            assertEquals(mode != SumireFlickInputMode.VOICED, "きゅう" in outputs)
-        }
-    }
 
-    @Test
-    fun changingInputModeOnFloatingSumireAlsoUpdatesCachedDockedLayout() {
-        val (main, floating) = installSumireSurfaces("third-flick")
-        ReflectionHelpers.setField(service, "isKeyboardFloatingMode", true)
-        AppPreference.sumire_flick_input_mode_preference = SumireFlickInputMode.CONTRACTED
-        notifyPreferenceChanged(AppPreference.SUMIRE_FLICK_INPUT_MODE_KEY)
-        for (view in listOf(main.customLayoutDefault, floating.customLayoutFloating)) {
-            val outputs = layoutOf(view).hierarchicalFlickMaps.getValue("か").outputs()
-            assertTrue("Contracted sounds remain available", "きゅう" in outputs)
-            assertFalse("Voiced kana are removed from the contracted preset", "ぎ" in outputs)
-        }
-        AppPreference.sumire_flick_input_mode_preference = SumireFlickInputMode.VOICED
-        notifyPreferenceChanged(AppPreference.SUMIRE_FLICK_INPUT_MODE_KEY)
-        for (view in listOf(main.customLayoutDefault, floating.customLayoutFloating)) {
-            val outputs = layoutOf(view).hierarchicalFlickMaps.getValue("か").outputs()
-            assertTrue("Voiced kana remain available", "ぎ" in outputs)
-            assertFalse("Contracted sounds are removed from the voiced preset", "きゅう" in outputs)
-        }
-    }
+
+
 
     @Test
     fun changingRotationOnFloatingSumireAlsoUpdatesCachedDockedLayout() {
@@ -203,6 +166,10 @@ class IMEServiceSumireFlickRotationTest {
         assertEquals(SplitSlot.SUB, ReflectionHelpers.getField<SplitSlot>(service, "activeSplitSlot"))
     }
 
+
+
+
+
     private fun installSumireSurfaces(
         style: String = "second-flick"
     ): Pair<MainLayoutBinding, FloatingKeyboardLayoutBinding> {
@@ -211,6 +178,7 @@ class IMEServiceSumireFlickRotationTest {
         val floating = FloatingKeyboardLayoutBinding.inflate(LayoutInflater.from(themed))
         ReflectionHelpers.setField(service, "mainLayoutBinding", main)
         ReflectionHelpers.setField(service, "floatingKeyboardBinding", floating)
+        AppPreference.sumire_keyboard_style = style
         ReflectionHelpers.setField(service, "sumireInputStyle", style)
         setPresentedMode(TenKeyQWERTYMode.Sumire)
         setSumireLayout(main.customLayoutDefault)
@@ -260,12 +228,7 @@ class IMEServiceSumireFlickRotationTest {
         }
     }
 
-    private fun TfbiFlickNode.outputs(): Set<String> = when (this) {
-        is TfbiFlickNode.Input -> setOf(char)
-        is TfbiFlickNode.SubMenu -> nextMap.values.flatMap { it.outputs() }.toSet()
-        is TfbiFlickNode.StatefulKey -> listOfNotNull(normalMap, dakutenMap, handakutenMap)
-            .flatMap { map -> map.values.flatMap { it.outputs() } }.toSet()
-    }
+
 
     private fun notifyPreferenceChanged(key: String = AppPreference.SUMIRE_FLICK_ROTATION_KEY) {
         val listener = ReflectionHelpers.getField<SharedPreferences.OnSharedPreferenceChangeListener>(

@@ -49,6 +49,18 @@ sealed class KeyAction {
     data object DeleteAfterCursor : KeyAction()
     data object UndoLastDelete : KeyAction()
 
+    // Editor-facing keys and independently latched modifiers.
+    data object Tab : KeyAction()
+    data object Escape : KeyAction()
+    data object Home : KeyAction()
+    data object End : KeyAction()
+    data object PageUp : KeyAction()
+    data object PageDown : KeyAction()
+    data object NextField : KeyAction()
+    data object PreviousField : KeyAction()
+    data object CtrlLock : KeyAction()
+    data object AltLock : KeyAction()
+
     data object SwitchDirectMode : KeyAction()
 
     // カーソル操作系
@@ -150,7 +162,9 @@ data class KeyData(
     val keyType: KeyType = if (isFlickable) KeyType.CIRCULAR_FLICK else KeyType.NORMAL,
     val specialKeyColorStyle: SpecialKeyColorStyle = SpecialKeyColorStyle.SPECIAL,
     val doubleTapBinding: DoubleTapBinding? = null,
-    val textInputBehavior: KeyTextInputBehavior = KeyTextInputBehavior.NORMAL
+    val textInputBehavior: KeyTextInputBehavior = KeyTextInputBehavior.NORMAL,
+    val qwertyConfig: QwertyKeyConfig? = null,
+    val popupMapConfig: PopupKeyConfig? = null
 )
 
 data class GridPlacement(
@@ -589,7 +603,6 @@ data class KeyboardLayout(
     val twoStepFlickKeyMaps: Map<String, Map<TfbiFlickDirection, Map<TfbiFlickDirection, String>>> = emptyMap(),
     val longPressFlickKeyMaps: Map<String, Map<FlickDirection, String>> = emptyMap(),
     val twoStepLongPressKeyMaps: Map<String, Map<TfbiFlickDirection, Map<TfbiFlickDirection, String>>> = emptyMap(),
-    val hierarchicalFlickMaps: Map<String, TfbiFlickNode.StatefulKey> = emptyMap(),
     val items: List<KeyboardLayoutItem> = keys.map { it.toKeyItem() },
     val columnUnitCount: Int = columnCount * 2,
     val rowUnitCount: Int = rowCount * 2,
@@ -621,9 +634,13 @@ enum class KeyType {
 
     STICKY_TWO_STEP_FLICK,
 
-    HIERARCHICAL_FLICK,
+    /** User-defined popup maps with arbitrary text and map transitions. */
+    FREE_FLICK,
 
-    FLICK_LONG_PRESS
+    FLICK_LONG_PRESS,
+
+    /** Configurable key preview and a grid of long-press alternatives. */
+    QWERTY
 }
 
 enum class ShapeType {

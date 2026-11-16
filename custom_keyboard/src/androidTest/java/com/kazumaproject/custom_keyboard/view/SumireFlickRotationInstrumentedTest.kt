@@ -17,8 +17,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.kazumaproject.core.data.popup.TfbiPopupPresentationMode
 import com.kazumaproject.custom_keyboard.data.FlickDirection
 import com.kazumaproject.custom_keyboard.data.KeyAction
+import com.kazumaproject.custom_keyboard.data.KeyboardLayoutOrigin
 import com.kazumaproject.custom_keyboard.data.KeyboardInputMode
-import com.kazumaproject.custom_keyboard.data.SumireFlickInputMode
 import com.kazumaproject.custom_keyboard.data.TfbiFlickRotation
 import com.kazumaproject.custom_keyboard.data.TfbiGuidePopupState
 import com.kazumaproject.custom_keyboard.layout.KeyboardDefaultLayouts
@@ -47,8 +47,7 @@ class SumireFlickRotationTestActivity : Activity() {
     fun configure(
         style: String,
         rotation: TfbiFlickRotation,
-        popup: TfbiPopupPresentationMode,
-        mode: SumireFlickInputMode = SumireFlickInputMode.ALL
+        popup: TfbiPopupPresentationMode
     ) {
         root.removeAllViews()
         actions.clear()
@@ -61,9 +60,8 @@ class SumireFlickRotationTestActivity : Activity() {
                 dynamicKeyStates = emptyMap(),
                 inputLayoutType = "flick",
                 inputStyle = style,
-                tfbiFlickRotation = rotation,
-                sumireFlickInputMode = mode
-            ))
+                tfbiFlickRotation = rotation
+            ), origin = KeyboardLayoutOrigin.BUILT_IN)
             setOnKeyboardActionListener(object : FlickKeyboardView.OnKeyboardActionListener {
                 override fun onPress(action: KeyAction) = Unit
                 override fun onAction(action: KeyAction, isFlick: Boolean) { actions += action }
@@ -78,14 +76,18 @@ class SumireFlickRotationTestActivity : Activity() {
     }
 
     fun kaKey(): View = (0 until keyboard.childCount).map(keyboard::getChildAt)
-        .filterIsInstance<AutoSizeButton>().first { it.text.toString() == "か" }
+        .filterIsInstance<AutoSizeButton>().firstOrNull { it.text.toString() == "か" }
+        ?: error("Missing built-in ka key: " + (0 until keyboard.childCount).map { index ->
+            val key = keyboard.getChildAt(index)
+            "${key.javaClass.simpleName}/${(key as? android.widget.TextView)?.text}/${key.isEnabled}"
+        })
 }
 
 @RunWith(AndroidJUnit4::class)
 class SumireFlickRotationInstrumentedTest {
     @Test
     fun generatedSecondAndThirdFlickLayoutsRotateDakutenWithTheirPopups() = withWindow { scenario ->
-        for (style in listOf("second-flick", "third-flick")) {
+        for (style in listOf("second-flick")) {
             for (rotation in TfbiFlickRotation.entries) for (popup in POPUP_MODES) {
                 configure(scenario, style, rotation, popup)
                 val paths = listOf(
@@ -112,44 +114,11 @@ class SumireFlickRotationInstrumentedTest {
         }
     }
 
-    @Test
-    fun generatedThirdFlickLayoutPreservesYoonLongVowelsAfterRotatedDakuten() = withWindow { scenario ->
-        for (rotation in TfbiFlickRotation.entries) for (popup in POPUP_MODES) {
-            configure(scenario, "third-flick", rotation, popup)
-            val yoon = UP
-            val longVowel = UP_LEFT
-            for (dakuten in listOf(false, true)) {
-                val gesture = Gesture(scenario, "third-flick", popup)
-                gesture.down()
-                gesture.move(LEFT)
-                if (dakuten) {
-                    gesture.move(if (rotation == TfbiFlickRotation.CLOCKWISE) UP_LEFT else DOWN_LEFT)
-                }
-                val base = if (dakuten) "ぎゅ" else "きゅ"
-                scenario.onActivity {
-                    assertPopupOption(it, popup, yoon,
-                        if (popup == TfbiPopupPresentationMode.GUIDE_ABOVE_KEY && !dakuten) "ゅ" else base)
-                }
-                gesture.move(yoon)
-                scenario.onActivity {
-                    assertPopupOption(it, popup, longVowel,
-                        if (popup == TfbiPopupPresentationMode.GUIDE_ABOVE_KEY) "う" else "${base}う")
-                }
-                gesture.move(longVowel)
-                scenario.onActivity { assertPopupSelection(it, popup, longVowel, "${base}う") }
-                gesture.up()
-                scenario.onActivity {
-                    assertEquals("$rotation $popup dakuten=$dakuten",
-                        listOf(KeyAction.Text("${base}う")), it.actions)
-                    assertPopupDismissed(it, popup)
-                }
-            }
-        }
-    }
+
 
     @Test
     fun cancellingRotatedDakutenGestureClearsPopupAndNextGestureStartsNormally() = withWindow { scenario ->
-        for (style in listOf("second-flick", "third-flick")) {
+        for (style in listOf("second-flick")) {
             for (rotation in TfbiFlickRotation.entries) for (popup in POPUP_MODES) {
                 configure(scenario, style, rotation, popup)
                 val gesture = Gesture(scenario, style, popup)
@@ -173,82 +142,9 @@ class SumireFlickRotationInstrumentedTest {
         }
     }
 
-    @Test
-    fun selectedInputModeControlsAvailablePopupOptionsAndCommittedGestures() = withWindow { scenario ->
-        for (mode in SumireFlickInputMode.entries) {
-            for (rotation in listOf(TfbiFlickRotation.DEFAULT, TfbiFlickRotation.CLOCKWISE)) {
-                for (popup in POPUP_MODES) {
-                    configure(scenario, "third-flick", rotation, popup, mode)
-                    val voicedDirection = if (rotation == TfbiFlickRotation.CLOCKWISE) UP_LEFT else DOWN_LEFT
-                    val gesture = Gesture(scenario, "third-flick", popup)
-                    gesture.down()
-                    gesture.move(LEFT)
-                    scenario.onActivity {
-                        if (mode == SumireFlickInputMode.CONTRACTED) {
-                            assertPopupOptionAbsent(it, popup, voicedDirection)
-                        } else {
-                            assertPopupOption(it, popup, voicedDirection, "ぎ")
-                        }
-                        if (mode == SumireFlickInputMode.VOICED) {
-                            assertPopupOptionAbsent(it, popup, UP)
-                            assertPopupOptionAbsent(it, popup, RIGHT)
-                            assertPopupOptionAbsent(it, popup, DOWN)
-                        } else {
-                            assertPopupOption(it, popup, UP,
-                                if (popup == TfbiPopupPresentationMode.GUIDE_ABOVE_KEY) "ゅ" else "きゅ")
-                        }
-                    }
-                    val expected = if (mode == SumireFlickInputMode.VOICED) {
-                        gesture.move(voicedDirection)
-                        "ぎ"
-                    } else {
-                        gesture.move(UP)
-                        gesture.move(UP_LEFT)
-                        "きゅう"
-                    }
-                    gesture.up()
-                    scenario.onActivity {
-                        assertEquals("$mode $rotation $popup", listOf(KeyAction.Text(expected)), it.actions)
-                    }
-                }
-            }
-        }
-    }
 
-    @Test
-    fun replacingInputModeCancelsCurrentVoicedGestureAndUsesNewPopupMap() = withWindow { scenario ->
-        for (popup in POPUP_MODES) {
-            configure(scenario, "third-flick", TfbiFlickRotation.CLOCKWISE, popup)
-            val gesture = Gesture(scenario, "third-flick", popup)
-            gesture.down()
-            gesture.move(LEFT)
-            gesture.move(UP_LEFT)
-            scenario.onActivity {
-                it.keyboard.setKeyboard(KeyboardDefaultLayouts.createFinalLayout(
-                    mode = KeyboardInputMode.HIRAGANA,
-                    dynamicKeyStates = emptyMap(),
-                    inputLayoutType = "flick",
-                    inputStyle = "third-flick",
-                    tfbiFlickRotation = TfbiFlickRotation.CLOCKWISE,
-                    sumireFlickInputMode = SumireFlickInputMode.CONTRACTED
-                ))
-            }
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
-            gesture.up(expectHandled = false)
-            scenario.onActivity {
-                assertTrue(it.actions.isEmpty())
-                assertPopupDismissed(it, popup)
-            }
-            val next = Gesture(scenario, "third-flick", popup)
-            next.down()
-            next.move(LEFT)
-            scenario.onActivity { assertPopupOptionAbsent(it, popup, UP_LEFT) }
-            next.move(UP)
-            next.move(UP_LEFT)
-            next.up()
-            scenario.onActivity { assertEquals(listOf(KeyAction.Text("きゅう")), it.actions) }
-        }
-    }
+
+
 
     private fun withWindow(block: (ActivityScenario<SumireFlickRotationTestActivity>) -> Unit) {
         val context = InstrumentationRegistry.getInstrumentation().context
@@ -261,10 +157,9 @@ class SumireFlickRotationInstrumentedTest {
         scenario: ActivityScenario<SumireFlickRotationTestActivity>,
         style: String,
         rotation: TfbiFlickRotation,
-        popup: TfbiPopupPresentationMode,
-        mode: SumireFlickInputMode = SumireFlickInputMode.ALL
+        popup: TfbiPopupPresentationMode
     ) {
-        scenario.onActivity { it.configure(style, rotation, popup, mode) }
+        scenario.onActivity { it.configure(style, rotation, popup) }
         InstrumentationRegistry.getInstrumentation().waitForIdleSync()
         scenario.onActivity {
             assertTrue("Keyboard must be attached and laid out", it.keyboard.isAttachedToWindow)

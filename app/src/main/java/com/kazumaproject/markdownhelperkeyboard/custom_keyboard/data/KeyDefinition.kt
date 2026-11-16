@@ -45,5 +45,7 @@ data class KeyDefinition(
     val specialKeyColorStyle: String = SpecialKeyColorStyle.SPECIAL.dbValue,
     val doubleTapAction: String? = null,
     val doubleTapPolicy: String? = null,
-    val textInputBehavior: String = KeyTextInputBehavior.NORMAL.dbValue
+    val textInputBehavior: String = KeyTextInputBehavior.NORMAL.dbValue,
+    val popupMapConfigJson: String? = null,
+    val qwertyConfigJson: String? = null
 )

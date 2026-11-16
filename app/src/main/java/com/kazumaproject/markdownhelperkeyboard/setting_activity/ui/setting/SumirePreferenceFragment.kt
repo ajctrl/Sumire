@@ -12,13 +12,21 @@ class SumirePreferenceFragment : AsyncPreferenceFragment() {
     override val preferencesXmlRes: Int = R.xml.pref_sumire
 
     override fun onPreferencesReady(savedInstanceState: Bundle?, rootKey: String?) {
+        findPreference<Preference>("setting_route_candidate_display")?.setOnPreferenceClickListener {
+            navigateSafely(R.id.candidateDisplayPreferenceFragment, Bundle().apply { putString("geometryKeyboard", "SUMIRE") })
+            true
+        }
+
+
+        findPreference<Preference>("sumire_geometry_preference")?.setOnPreferenceClickListener {
+            navigateSafely(R.id.keyboardGeometrySettingsFragment, Bundle().apply { putString("geometryKeyboard", "SUMIRE") })
+            true
+        }
 
         val sumireKeyboardSizePreference =
             findPreference<Preference>("sumire_keyboard_size_preference")
 
         // 入力スタイルに応じて表示を切り替える設定項目を先に取得しておく
-        val hierarchicalFlickAngleMarginPreference =
-            findPreference<Preference>("hierarchical_flick_angle_margin_preference")
         val sumireCustomAnglePreference =
             findPreference<Preference>("sumire_custom_angle_preference")
         val circularSlotActionSettingPreference =
@@ -32,20 +40,36 @@ class SumirePreferenceFragment : AsyncPreferenceFragment() {
             findPreference<ListPreference>("tfbi_diagonal_recognition_mode_preference")
         val sumireFlickRotationPreference =
             findPreference<ListPreference>("sumire_flick_rotation_preference")
-        val sumireFlickInputModePreference =
-            findPreference<ListPreference>("sumire_flick_input_mode_preference")
 
         sumireFlickRotationPreference?.summaryProvider = Preference.SummaryProvider<ListPreference> {
             listOfNotNull(it.entry, getString(R.string.sumire_flick_rotation_summary))
                 .joinToString("\n")
         }
-        sumireFlickInputModePreference?.summaryProvider = Preference.SummaryProvider<ListPreference> {
-            listOfNotNull(it.entry, getString(R.string.sumire_flick_input_mode_summary))
-                .joinToString("\n")
-        }
+
 
         fun isTfbiStyle(value: String?): Boolean {
-            return value == "second-flick" || value == "third-flick"
+            return value == "second-flick"
+        }
+
+        fun updatePopupSettings(style: String?) {
+            val free = style == com.kazumaproject.custom_keyboard.data.SumirePopupDefaults.STYLE
+            listOf("sumire_show_flick_popup_preference", "sumire_show_long_press_popup_preference").forEach { key ->
+                findPreference<Preference>(key)?.apply {
+                    isEnabled = !free
+                    summary = if (free) getString(R.string.popup_only_kana) else null
+                }
+            }
+            findPreference<ListPreference>("sumire_input_method_preference")?.let { method ->
+                method.summary = if (free) getString(R.string.popup_method_scope, method.entry) else method.entry
+            }
+        }
+        findPreference<Preference>("sumire_free_flick_settings")?.setOnPreferenceClickListener {
+            navigateSafely(R.id.freeFlickSettingsFragment)
+            true
+        }
+        findPreference<Preference>("sumire_popup_map_editor_preference")?.setOnPreferenceClickListener {
+            navigateSafely(R.id.popupMapEditorFragment)
+            true
         }
 
         sumireStylePreference?.apply {
@@ -55,16 +79,15 @@ class SumirePreferenceFragment : AsyncPreferenceFragment() {
             }
 
             // 【追加】初期表示状態の設定
-            hierarchicalFlickAngleMarginPreference?.isVisible = (value == "third-flick")
             tfbiFlickStartPositionPreference?.isVisible = isTfbiStyle(value)
             tfbiDiagonalRecognitionPreference?.isVisible = isTfbiStyle(value)
             sumireFlickRotationPreference?.isVisible = isTfbiStyle(value)
-            sumireFlickInputModePreference?.isVisible = (value == "third-flick")
             sumireCustomAnglePreference?.isVisible = (value == "sumire")
             circularSlotActionSettingPreference?.isVisible = (value == "sumire")
 
             setOnPreferenceChangeListener { preference, newValue ->
                 val stringValue = newValue as String
+                updatePopupSettings(stringValue)
                 val listPreference = preference as ListPreference
                 val index = listPreference.findIndexOfValue(stringValue)
 
@@ -74,11 +97,9 @@ class SumirePreferenceFragment : AsyncPreferenceFragment() {
                 }
 
                 // 【追加】変更時の表示切り替え
-                hierarchicalFlickAngleMarginPreference?.isVisible = (stringValue == "third-flick")
                 tfbiFlickStartPositionPreference?.isVisible = isTfbiStyle(stringValue)
                 tfbiDiagonalRecognitionPreference?.isVisible = isTfbiStyle(stringValue)
                 sumireFlickRotationPreference?.isVisible = isTfbiStyle(stringValue)
-                sumireFlickInputModePreference?.isVisible = (stringValue == "third-flick")
                 sumireCustomAnglePreference?.isVisible = (stringValue == "sumire")
                 circularSlotActionSettingPreference?.isVisible = (stringValue == "sumire")
 
@@ -96,11 +117,15 @@ class SumirePreferenceFragment : AsyncPreferenceFragment() {
                 val listPreference = preference as ListPreference
                 val index = listPreference.findIndexOfValue(newValue as String)
                 if (index >= 0) {
-                    preference.summary = listPreference.entries[index].toString()
+                    preference.summary = if (sumireStylePreference?.value == com.kazumaproject.custom_keyboard.data.SumirePopupDefaults.STYLE) {
+                        getString(R.string.popup_method_scope, listPreference.entries[index])
+                    } else listPreference.entries[index].toString()
                 }
                 true
             }
         }
+
+        updatePopupSettings(sumireStylePreference?.value)
 
         sumireKeyboardSizePreference?.apply {
             setOnPreferenceClickListener {
@@ -171,12 +196,7 @@ class SumirePreferenceFragment : AsyncPreferenceFragment() {
         updateGuideDetailAvailability()
         updateEnglishGuideAvailability(englishQwertyPreference?.isChecked == true)
 
-        hierarchicalFlickAngleMarginPreference?.apply {
-            setOnPreferenceClickListener {
-                navigateSafely(R.id.hierarchicalFlickAngleMarginFragment)
-                true
-            }
-        }
+
 
         sumireCustomAnglePreference?.apply {
             setOnPreferenceClickListener {

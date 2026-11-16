@@ -62,6 +62,8 @@ data class ImeKeyboardAppearance(
     val inputCompositionTextColor: Int,
     val inputConversionBackgroundColor: Int,
     val inputConversionTextColor: Int,
+    val candidateIndicatorStyles: com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.CandidateIndicatorStyles =
+        com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.CandidateIndicatorStyles(),
 )
 
 data class ImePreferencesSnapshot(
@@ -81,6 +83,8 @@ data class ImePreferencesSnapshot(
     val isTextMacroCandidateEnable: Boolean,
     val systemNgramDictionaryEnabled: Boolean,
     val customNgramDictionaryEnabled: Boolean,
+    val showCharacterIndicators: Boolean,
+    val showCharacterTypeLabels: Boolean,
     val showDictionaryCandidateLabels: Boolean,
     val suppressHentaiganaCandidates: Boolean,
     val zeroQuerySuggestionPreference: Boolean,
@@ -99,7 +103,7 @@ data class ImePreferencesSnapshot(
     val flickThresholdShapePreferenceValue: String,
     val tfbiDiagonalRecognitionModePreferenceValue: String,
     val tfbiFlickRotationPreferenceValue: String,
-    val sumireFlickInputModePreferenceValue: String,
+    val sumireModeKeyHighlight: Boolean,
     val longPressTimeoutPreferenceValue: Int,
     val qwertyShowIMEButtonPreference: Boolean,
     val qwertyShowEmojiButtonPreference: Boolean,
@@ -233,10 +237,10 @@ data class ImePreferencesSnapshot(
     val qwertyLandscapePositionPreferenceValue: Boolean,
     val qwertyLandscapeBottomMarginPreferenceValue: Int,
     val zenzEnableStatePreference: Boolean,
-    val zenzaiEnableStatePreference: Boolean,
     val zenzProfilePreference: String,
     val zenzEnableLongPressConversionPreference: Boolean,
     val zenzRerankPreference: Boolean,
+    val zenzaiDraftPreference: Boolean,
     val qwertyKeyVerticalMargin: Float,
     val qwertyKeyHorizontalGap: Float,
     val qwertyKeyIndentLarge: Float,
@@ -258,7 +262,6 @@ data class ImePreferencesSnapshot(
     val learnDictionaryPredictionCandidateLimit: Int,
     val circularFlickWindowScale: Float,
     val circularFlickDirectionCount: Int,
-    val hierarchicalFlickModeSwitchAngleMargin: Int,
     val customKeyBorderWidth: Int,
     val qwertySwitchNumberKeyWithoutNumberPreference: Boolean,
     val customRomajiZenkakuConversionEnablePreference: Boolean,
@@ -382,6 +385,8 @@ data class ImePreferencesSnapshot(
                     appPreference.system_ngram_dictionary_enable_preference,
                 customNgramDictionaryEnabled =
                     appPreference.custom_ngram_dictionary_enable_preference,
+                showCharacterIndicators = appPreference.candidate_character_type_indicators_preference,
+                showCharacterTypeLabels = appPreference.candidate_character_type_labels_preference,
                 showDictionaryCandidateLabels =
                     appPreference.show_dictionary_candidate_labels_preference,
                 suppressHentaiganaCandidates =
@@ -446,8 +451,7 @@ data class ImePreferencesSnapshot(
                     appPreference.tfbi_diagonal_recognition_mode_preference.preferenceValue,
                 tfbiFlickRotationPreferenceValue =
                     appPreference.sumire_flick_rotation_preference.preferenceValue,
-                sumireFlickInputModePreferenceValue =
-                    appPreference.sumire_flick_input_mode_preference.preferenceValue,
+                sumireModeKeyHighlight = appPreference.sumire_mode_key_highlight_preference,
                 longPressTimeoutPreferenceValue =
                     appPreference.long_press_timeout_preference ?: 300,
                 qwertyShowIMEButtonPreference = appPreference.qwerty_show_ime_button ?: true,
@@ -659,13 +663,12 @@ data class ImePreferencesSnapshot(
                     appPreference.qwerty_keyboard_vertical_margin_bottom_landscape ?: 0,
                 zenzEnableStatePreference =
                     AppVariantConfig.hasZenz && appPreference.enable_zenz_preference,
-                zenzaiEnableStatePreference =
-                    AppVariantConfig.hasZenz && appPreference.enable_zenzai_preference,
                 zenzProfilePreference = appPreference.zenz_profile_preference,
                 zenzEnableLongPressConversionPreference =
                     AppVariantConfig.hasZenz && appPreference.enable_zenz_long_press_preference,
                 zenzRerankPreference =
                     AppVariantConfig.hasZenz && appPreference.enable_zenz_rerank_preference,
+                zenzaiDraftPreference = AppVariantConfig.hasZenz && appPreference.enable_zenzai_preference,
                 qwertyKeyVerticalMargin = appPreference.qwerty_key_vertical_margin ?: 5.0f,
                 qwertyKeyHorizontalGap = appPreference.qwerty_key_horizontal_gap ?: 2.0f,
                 qwertyKeyIndentLarge = appPreference.qwerty_key_indent_large ?: 23.0f,
@@ -678,6 +681,7 @@ data class ImePreferencesSnapshot(
                 qwertySpecialKeyIconSize = appPreference.qwerty_special_key_icon_size ?: 18.0f,
                 keyboardSkin = appPreference.keyboardSkin,
                 appearance = ImeKeyboardAppearance(
+                    candidateIndicatorStyles = appPreference.candidateIndicatorStyles,
                     keyboardThemeMode = appPreference.theme_mode,
                     customThemeBgColor = appPreference.custom_theme_bg_color,
                     customThemeKeyColor = appPreference.custom_theme_key_color,
@@ -773,8 +777,6 @@ data class ImePreferencesSnapshot(
                     appPreference.learn_dictionary_prediction_candidate_limit_preference,
                 circularFlickWindowScale = appPreference.circular_flickWindow_scale,
                 circularFlickDirectionCount = appPreference.circularFlickDirectionCount,
-                hierarchicalFlickModeSwitchAngleMargin =
-                    appPreference.hierarchical_flick_mode_switch_angle_margin_preference,
                 customKeyBorderWidth = appPreference.custom_theme_border_width,
                 qwertySwitchNumberKeyWithoutNumberPreference =
                     appPreference.qwerty_switch_number_key_without_number_preference,
