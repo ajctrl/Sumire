@@ -187,8 +187,15 @@ adb -s "$serial" shell getprop > "$artifact_dir/device-properties-$phase.txt"
 free -h > "$artifact_dir/runner-memory-$phase.txt"
 lscpu > "$artifact_dir/runner-cpu-$phase.txt"
 install_build() {
+    local previous_package="$package"
     package="$(cat "$package_dir/$1/package.txt")"
     [[ "$package" =~ ^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$ ]] || return 1
+    # Upstream and fork test APKs share provider authorities. Remove the previous
+    # pair when IDs differ so both measurement orders start without a collision.
+    if [[ -n "$previous_package" && "$previous_package" != "$package" ]]; then
+        adb -s "$serial" uninstall "$previous_package.test" > /dev/null
+        adb -s "$serial" uninstall "$previous_package" > /dev/null
+    fi
     runner="$package.test/androidx.test.runner.AndroidJUnitRunner"
     adb -s "$serial" install -r -t "$package_dir/$1/app.apk" > /dev/null
     adb -s "$serial" install -r -t "$package_dir/$1/test.apk" > /dev/null

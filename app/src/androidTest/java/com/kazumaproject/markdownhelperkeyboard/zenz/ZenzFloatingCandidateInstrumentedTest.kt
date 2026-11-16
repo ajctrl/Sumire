@@ -172,7 +172,10 @@ class ZenzFloatingCandidateInstrumentedTest {
         val oldHardware = shell("settings get secure show_ime_with_hard_keyboard")
         val oldRotation = shell("settings get system user_rotation")
         val oldAutoRotation = shell("settings get system accelerometer_rotation")
-        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        val ime = android.content.ComponentName(
+            ctx.packageName,
+            "com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        ).flattenToShortString()
         ui.serviceInfo = ui.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
@@ -290,7 +293,10 @@ class ZenzFloatingCandidateInstrumentedTest {
         val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
         val original = prefs.all.toMap()
         val oldIme = shell("settings get secure default_input_method")
-        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        val ime = android.content.ComponentName(
+            ctx.packageName,
+            "com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        ).flattenToShortString()
         ui.serviceInfo = ui.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
@@ -353,7 +359,10 @@ class ZenzFloatingCandidateInstrumentedTest {
         ui.serviceInfo = ui.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
-        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        val ime = android.content.ComponentName(
+            ctx.packageName,
+            "com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        ).flattenToShortString()
         val report = StringBuilder()
         var sawCorrectedMinimum = false
         var sawFlickCorrectedMinimum = false
@@ -436,7 +445,10 @@ class ZenzFloatingCandidateInstrumentedTest {
         ui.serviceInfo = ui.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
-        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        val ime = android.content.ComponentName(
+            ctx.packageName,
+            "com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        ).flattenToShortString()
         try {
             shell("input keyevent WAKEUP")
             shell("wm dismiss-keyguard")
@@ -578,7 +590,10 @@ class ZenzFloatingCandidateInstrumentedTest {
         val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
         val original = prefs.all.toMap()
         val oldIme = shell("settings get secure default_input_method")
-        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        val ime = android.content.ComponentName(
+            ctx.packageName,
+            "com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
+        ).flattenToShortString()
         val report = StringBuilder()
         val oldFlags = ui.serviceInfo.flags
         ui.serviceInfo = ui.serviceInfo.apply {
