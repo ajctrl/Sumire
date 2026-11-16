@@ -69,6 +69,10 @@ jobs:
         with:
           path: ${{ env.ZENZ_MODEL_CACHE_DIR }}
           key: ${{ runner.os }}-zenz-model-v2-4f5423f0fad41a73b1242eb96fe5c12ae4fdca83-Q5_K_M-ggml-model-Q5_K_M.gguf
+      - name: Select a matching upstream baseline for release syncs
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 .github/scripts/zenz-performance-baseline.py "$ZENZ_PERF_BASELINE_REF" >> "$GITHUB_ENV"
       - name: Build and validate both revisions
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}

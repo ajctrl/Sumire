@@ -163,6 +163,12 @@ PY
 for label in before after; do
     root="$head_root"; if [[ "$label" == before ]]; then root="$baseline_root"; fi
     mkdir -p "$package_dir/$label"
+    python3 - "$root" > "$package_dir/$label/package.txt" <<'PYCODE'
+import json, sys
+from pathlib import Path
+metadata = Path(sys.argv[1])/'app/build/outputs/apk/fullStandard/debug/output-metadata.json'
+print(json.loads(metadata.read_text())['applicationId'])
+PYCODE
     cp "$(apk "$root" app)" "$package_dir/$label/app.apk"
     cp "$(apk "$root" test)" "$package_dir/$label/test.apk"
 done
@@ -174,12 +180,16 @@ export IME_EMULATOR_READINESS_LOG="$artifact_dir/logs/android-readiness.log"
 source "$head_root/.github/scripts/ime-emulator-common.sh"
 ime_emulator_prepare
 serial="$IME_EMULATOR_SERIAL"
-package=com.kazumaproject.markdownhelperkeyboard
-runner="$package.test/androidx.test.runner.AndroidJUnitRunner"
+namespace=com.kazumaproject.markdownhelperkeyboard
+package=""
+runner=""
 adb -s "$serial" shell getprop > "$artifact_dir/device-properties-$phase.txt"
 free -h > "$artifact_dir/runner-memory-$phase.txt"
 lscpu > "$artifact_dir/runner-cpu-$phase.txt"
 install_build() {
+    package="$(cat "$package_dir/$1/package.txt")"
+    [[ "$package" =~ ^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$ ]] || return 1
+    runner="$package.test/androidx.test.runner.AndroidJUnitRunner"
     adb -s "$serial" install -r -t "$package_dir/$1/app.apk" > /dev/null
     adb -s "$serial" install -r -t "$package_dir/$1/test.apk" > /dev/null
 }
@@ -233,9 +243,9 @@ run_probe() {
         return 1
     fi
 }
-core="$package.converter.ZenzCorrectionPerformanceInstrumentedTest#measureCorrectionConversion"
-native="$package.zenz.ZenzRuntimeInstrumentedTest#measureGenerationPerformance"
-floating="$package.zenz.ZenzFloatingCandidateInstrumentedTest#measureFloatingResultLatency"
+core="$namespace.converter.ZenzCorrectionPerformanceInstrumentedTest#measureCorrectionConversion"
+native="$namespace.zenz.ZenzRuntimeInstrumentedTest#measureGenerationPerformance"
+floating="$namespace.zenz.ZenzFloatingCandidateInstrumentedTest#measureFloatingResultLatency"
 
 # Each timing pair shares one runner/emulator; alternate the before/after order.
 case "$phase" in
@@ -275,7 +285,7 @@ case "$phase" in
         run_probe after selection "$core" zenz-correction-perf.txt false \
             -e zenzCorrectionPerf true -e selectionOnly true -e sets 1 -e iterations 100 -e warmups 20
         fi
-        run_probe after correction-ime "$package.zenz.ZenzFloatingCandidateInstrumentedTest#correctionSettingsAutomaticallySelectTheMinimumNBestReading" \
+        run_probe after correction-ime "$namespace.zenz.ZenzFloatingCandidateInstrumentedTest#correctionSettingsAutomaticallySelectTheMinimumNBestReading" \
             zenz-correction-ime.txt false -e zenzCorrectionImeProbe true
         ;;
     *) echo "Unknown measurement phase: $phase" >&2; exit 2 ;;
