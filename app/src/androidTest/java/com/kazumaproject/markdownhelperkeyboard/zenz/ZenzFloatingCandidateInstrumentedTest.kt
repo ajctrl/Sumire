@@ -172,7 +172,7 @@ class ZenzFloatingCandidateInstrumentedTest {
         val oldHardware = shell("settings get secure show_ime_with_hard_keyboard")
         val oldRotation = shell("settings get system user_rotation")
         val oldAutoRotation = shell("settings get system accelerometer_rotation")
-        val ime = "${ctx.packageName}/.ime_service.IMEService"
+        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
         ui.serviceInfo = ui.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
@@ -290,7 +290,7 @@ class ZenzFloatingCandidateInstrumentedTest {
         val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
         val original = prefs.all.toMap()
         val oldIme = shell("settings get secure default_input_method")
-        val ime = "${ctx.packageName}/.ime_service.IMEService"
+        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
         ui.serviceInfo = ui.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
@@ -353,7 +353,7 @@ class ZenzFloatingCandidateInstrumentedTest {
         ui.serviceInfo = ui.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
-        val ime = "${ctx.packageName}/.ime_service.IMEService"
+        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
         val report = StringBuilder()
         var sawCorrectedMinimum = false
         var sawFlickCorrectedMinimum = false
@@ -482,6 +482,26 @@ class ZenzFloatingCandidateInstrumentedTest {
     }
 
     // Keep these probe helpers with measureFloatingResultLatency when copying to the baseline.
+    private fun stableProbeKeyBounds(key: String): Rect {
+        val resourceName = "${ctx.packageName}:id/$key"
+        var previous = bounds(id(key))
+        var stableSince = SystemClock.uptimeMillis()
+        val deadline = stableSince + 15_000
+        do {
+            SystemClock.sleep(50)
+            val node = nodes().firstOrNull { it.viewIdResourceName == resourceName }
+            val current = node?.let(::bounds)
+            val now = SystemClock.uptimeMillis()
+            if (current == null || current != previous) {
+                stableSince = now
+                if (current != null) previous = current
+            } else if (now - stableSince >= 300) {
+                return current
+            }
+        } while (SystemClock.uptimeMillis() < deadline)
+        error("Keyboard key did not settle before the latency probe: $key")
+    }
+
     private fun field(owner: Any, name: String): Any? =
         owner.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(owner)
 
@@ -558,7 +578,7 @@ class ZenzFloatingCandidateInstrumentedTest {
         val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
         val original = prefs.all.toMap()
         val oldIme = shell("settings get secure default_input_method")
-        val ime = "${ctx.packageName}/.ime_service.IMEService"
+        val ime = "${ctx.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
         val report = StringBuilder()
         val oldFlags = ui.serviceInfo.flags
         ui.serviceInfo = ui.serviceInfo.apply {
@@ -590,8 +610,12 @@ class ZenzFloatingCandidateInstrumentedTest {
                 prefs.edit().putInt("zenz_debounce_time_preference", debounce).commit()
                 repeat(23) { iteration ->
                     withEditor { it.restartEditorInput(true) }
-                    touch(bounds(id("key_1")))
+                    touch(stableProbeKeyBounds("key_1"))
                     val service = currentImeService()
+                    ins.runOnMainSync {
+                        val input = field(service, "_inputString") as kotlinx.coroutines.flow.StateFlow<*>
+                        assertEquals("The untimed setup key must enter あ", "あ", input.value)
+                    }
                     val done = java.util.concurrent.CountDownLatch(1)
                     val started = java.util.concurrent.atomic.AtomicLong(0)
                     val drawn = java.util.concurrent.atomic.AtomicLong(0)
@@ -625,7 +649,7 @@ class ZenzFloatingCandidateInstrumentedTest {
                         choreographer[0]!!.postFrameCallback(frame)
                     }
                     try {
-                        val key = bounds(id("key_2"))
+                        val key = stableProbeKeyBounds("key_2")
                         val down = SystemClock.uptimeMillis()
                         fun send(action: Int) {
                             val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, key.exactCenterX(), key.exactCenterY(), 0)
