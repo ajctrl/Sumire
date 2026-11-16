@@ -4,7 +4,7 @@ import android.view.View
 import android.graphics.drawable.ColorDrawable
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
-import androidx.preference.PreferenceGroupAdapter
+import androidx.preference.PreferenceGroup
 import com.google.android.material.color.MaterialColors
 
 internal fun PreferenceFragmentCompat.expandHighlightedPreferenceAncestors() {
@@ -38,7 +38,7 @@ internal fun PreferenceFragmentCompat.scrollToHighlightedPreferenceAfterLayout(v
                     val list = listView
                     list.postDelayed({
                         if (this.view !== view) return@postDelayed
-                        val adapter = list.adapter as? PreferenceGroupAdapter ?: return@postDelayed
+                        val adapter = list.adapter as? PreferenceGroup.PreferencePositionCallback ?: return@postDelayed
                         val position = adapter.getPreferenceAdapterPosition(preferenceKey)
                         val item = list.findViewHolderForAdapterPosition(position)?.itemView ?: return@postDelayed
                         val color = MaterialColors.getColor(item, androidx.appcompat.R.attr.colorPrimary, 0xff6688aa.toInt())

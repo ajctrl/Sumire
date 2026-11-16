@@ -116,7 +116,13 @@ class CandidateDisplayPreferenceFragment : CommonPreferenceFragment() {
                 requestedPreferenceKey in verticalOnly && !geometry.sideCandidateVerticalText -> "candidate_display_vertical"
                 else -> "candidate_display_placement"
             }
-            findPreference<Preference>(key)?.performClick()
+            when (val preference = findPreference<Preference>(key)) {
+                is androidx.preference.DialogPreference -> onDisplayPreferenceDialog(preference)
+                is androidx.preference.TwoStatePreference -> {
+                    val checked = !preference.isChecked
+                    if (preference.callChangeListener(checked)) preference.isChecked = checked
+                }
+            }
             true
         }
         findPreference<Preference>("candidate_display_reset_position")?.setOnPreferenceClickListener {

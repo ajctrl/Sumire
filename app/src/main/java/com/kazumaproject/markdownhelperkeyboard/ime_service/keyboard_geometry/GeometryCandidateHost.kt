@@ -26,12 +26,22 @@ import com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.SuggestionA
 import com.kazumaproject.markdownhelperkeyboard.R
 import kotlin.math.roundToInt
 
+/** Compose ancestor transforms using APIs available on every supported Android version. */
+private fun View.geometryMatrixToGlobal(target: Matrix) {
+    (parent as? View)?.let { ancestor ->
+        ancestor.geometryMatrixToGlobal(target)
+        target.preTranslate(-ancestor.scrollX.toFloat(), -ancestor.scrollY.toFloat())
+    }
+    target.preTranslate(left.toFloat(), top.toFloat())
+    if (!matrix.isIdentity) target.preConcat(matrix)
+}
+
 /** Maps a keyboard-local rectangle through floating-panel scaling into its host. */
 internal fun geometryBoundsInHost(body: View, host: View, bounds: RectF): Rect? {
     val bodyToScreen = Matrix()
     val hostToScreen = Matrix()
-    body.transformMatrixToGlobal(bodyToScreen)
-    host.transformMatrixToGlobal(hostToScreen)
+    body.geometryMatrixToGlobal(bodyToScreen)
+    host.geometryMatrixToGlobal(hostToScreen)
     val screenToHost = Matrix()
     if (!hostToScreen.invert(screenToHost)) return null
     val mapped = RectF(bounds)
@@ -271,7 +281,7 @@ internal class GeometryCandidateHost(
         val view = panel ?: return false
         if (!view.isShown) return false
         val location = IntArray(2).also(view::getLocationOnScreen)
-        val localToGlobal = Matrix().also(view::transformMatrixToGlobal)
+        val localToGlobal = Matrix().also(view::geometryMatrixToGlobal)
         val globalOrigin = floatArrayOf(0f, 0f).also(localToGlobal::mapPoints)
         val globalToLocal = Matrix()
         if (!localToGlobal.invert(globalToLocal)) return false

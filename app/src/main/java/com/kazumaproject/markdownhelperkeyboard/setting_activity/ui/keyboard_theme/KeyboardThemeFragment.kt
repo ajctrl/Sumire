@@ -34,6 +34,8 @@ import timber.log.Timber
 @AndroidEntryPoint
 class KeyboardThemeFragment : CommonPreferenceFragment() {
 
+    override val preferencesXmlRes: Int = R.xml.pref_theme
+
     companion object {
         // System Theme Keys
         private const val PREF_KEY_DEFAULT = "theme_default"
@@ -455,7 +457,7 @@ class KeyboardThemeFragment : CommonPreferenceFragment() {
         // The XML is the search catalog as well as the canonical category structure.
         // Replace its metadata entries with the existing programmatic controls so their
         // color pickers, defaults and callbacks retain their original behavior.
-        val canonical = preferenceManager.inflateFromResource(context, R.xml.pref_theme, null)
+        val canonical = super.createPreferenceHierarchy(context)
         fun transfer(preference: Preference) {
             val placeholder = canonical.findPreference<Preference>(preference.key) ?: return
             val parent = placeholder.parent ?: return

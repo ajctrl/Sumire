@@ -494,7 +494,16 @@ class MushroomImeInstrumentedTest {
         try {
             prepareIme(targetIme)
             withHost {
-                val ime = requireNotNull(service())
+                var connectedIme: IMEService? = null
+                await("Host IME connected before configuring shortcuts") {
+                    ins.runOnMainSync {
+                        connectedIme = service()?.takeIf {
+                            it.isInputViewShown && it.currentInputEditorInfo?.packageName == context.packageName
+                        }
+                    }
+                    connectedIme != null
+                }
+                val ime = requireNotNull(connectedIme)
                 runBlocking { ime.shortCurRepository.updateShortcuts(listOf(ShortcutType.MUSHROOM, ShortcutType.CLIP_BOARD)) }
                 shell(
                     "am start -n ${ins.context.packageName}/${MushroomPluginActivity::class.java.name}" +

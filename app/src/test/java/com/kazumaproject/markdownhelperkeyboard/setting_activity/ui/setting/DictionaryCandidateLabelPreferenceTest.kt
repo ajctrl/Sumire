@@ -46,7 +46,7 @@ class DictionaryCandidateLabelPreferenceTest {
     }
 
     @Test
-    fun switchIsAvailableFromNewAndLegacyDictionarySettings() {
+    fun switchIsAvailableFromNewAndLegacyCandidateDisplaySettings() {
         assertTrue(dictionaryXmlContainsDefaultOffSwitch())
 
         val newSettings = SettingSearchIndex.searchable(context, SettingSearchScope.NEW_HOME)
@@ -54,18 +54,17 @@ class DictionaryCandidateLabelPreferenceTest {
         val legacySettings = SettingSearchIndex.searchable(context, SettingSearchScope.LEGACY_TABS)
             .first { it.key == SHOW_DICTIONARY_CANDIDATE_LABELS_KEY }
 
-        assertTrue(newSettings.destination is SettingDestinationType.SwitchPreference)
-        assertFalse(
-            (newSettings.destination as SettingDestinationType.SwitchPreference).defaultValue
-        )
-        val legacyTarget = requireNotNull(legacySettings.legacyTarget)
-        assertEquals(SettingTabRegistry.TAB_DICTIONARY, legacyTarget.tabKey)
-        assertEquals(SHOW_DICTIONARY_CANDIDATE_LABELS_KEY, legacyTarget.preferenceKey)
+        for (result in listOf(newSettings, legacySettings)) {
+            assertTrue(result.destination is SettingDestinationType.NavDestination)
+            assertEquals(SettingCategory.CANDIDATE_CONVERSION, result.category)
+            assertEquals(R.id.candidateDisplayPreferenceFragment, SettingDestinations.destinationId(result.destination))
+            assertEquals(SHOW_DICTIONARY_CANDIDATE_LABELS_KEY, SettingDestinations.highlightPreferenceKey(result.destination))
+        }
     }
 
     private fun dictionaryXmlContainsDefaultOffSwitch(): Boolean {
         val androidNamespace = "http://schemas.android.com/apk/res/android"
-        val parser = context.resources.getXml(R.xml.pref_dictionary)
+        val parser = context.resources.getXml(R.xml.pref_candidate_display)
         return parser.use {
             while (parser.eventType != XmlPullParser.END_DOCUMENT) {
                 if (

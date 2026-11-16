@@ -28,8 +28,8 @@ class OpenSourceLicensesTest {
             assertEquals(items.size, items.map { it.id }.toSet().size)
             assertTrue(items.all { it.title.isNotBlank() && it.summary.isNotBlank() })
         }
-        assertEquals(138, full.count { it.id.startsWith("library/") })
-        assertEquals(136, lite.count { it.id.startsWith("library/") })
+        assertEquals(139, full.count { it.id.startsWith("library/") })
+        assertEquals(137, lite.count { it.id.startsWith("library/") })
         assertEquals(lite.map { it.id }.toSet(), fdroid.map { it.id }.toSet())
         assertTrue(full.any { it.id == "zenz-model" })
         assertFalse(lite.any { it.id in listOf("zenz-model", "llama.cpp", "external-models") })
@@ -42,7 +42,13 @@ class OpenSourceLicensesTest {
     }
 
     @Test fun universalAiRuntimeKeepsPinnedNoticesInFullEditionOnly() {
-        val native = catalog.sections("full", false).flatMap { it.items }.first { it.id == "ai-runtime" }.document()
+        val items = catalog.sections().flatMap { it.items }
+        if (!BuildConfig.HAS_ZENZ) {
+            assertFalse(items.any { it.id == "ai-runtime" })
+            assertFalse(context.assets.list("software-licenses")!!.contains("ai-runtime-notices.txt"))
+            return
+        }
+        val native = items.first { it.id == "ai-runtime" }.document()
         assertTrue(native.contains("cd959bae99ff4bed22bef2604f45241c09bbb8c8"))
         assertTrue(native.contains("0d3f509e57041fbd073a1ee84cd9ccd36d148446"))
         assertTrue(native.contains("04f10f650d514df88b76d25e83db360142c7b174"))

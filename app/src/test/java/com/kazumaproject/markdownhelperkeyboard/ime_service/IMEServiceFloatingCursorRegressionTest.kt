@@ -43,6 +43,7 @@ class IMEServiceFloatingCursorRegressionTest {
     private val service = IMEService().also {
         ReflectionHelpers.callInstanceMethod<Unit>(it, "attachBaseContext", ClassParameter.from(Context::class.java, context))
         it.appPreference = mock<AppPreference>()
+        it.zenzRuntimeClient = mock()
         ReflectionHelpers.setField(it, "listAdapter", mock<FloatingCandidateListAdapter>())
         ReflectionHelpers.setField(it, "runtimeInputSharedPreferences", PreferenceManager.getDefaultSharedPreferences(context))
         ReflectionHelpers.setField(it, "qwertyGlideInputCoordinator", mock<QwertyGlideInputCoordinator>())
