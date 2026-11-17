@@ -222,6 +222,23 @@ class RepairIntegrationTests(unittest.TestCase):
         calls.assert_not_called()
         self.assertEqual(self.record_review.call_count, 1)
 
+    def test_ten_repairs_are_allowed_but_eleventh_is_handed_off_without_codex(self):
+        self.candidate()
+        for count in range(1, 11):
+            calls = self.resume({"fork.txt": {"text": f"fix {count}\n", "executable": False}})
+            calls.assert_called_once()
+            self.record_review.assert_not_called()
+            self.head = self.git("rev-parse", "HEAD")
+            self.plan["head"] = self.head
+            self.pull["head"]["sha"] = self.head
+            self.git("switch", "dev")
+        self.assertEqual(repair.candidate_depth(sync, self.base, self.target, self.head, self.next_state), 10)
+        calls = self.resume({"fork.txt": {"text": "fix 11\n", "executable": False}})
+        calls.assert_not_called()
+        self.record_review.assert_called_once()
+        self.assertIn("after 10 repairs", self.record_review.call_args.args[4])
+        self.assertEqual(self.git("ls-remote", "origin", f"refs/heads/{self.branch}").split()[0], self.head)
+
     def test_hand_modified_candidate_cannot_be_reused(self):
         self.candidate()
         self.git("switch", "--detach", self.head)

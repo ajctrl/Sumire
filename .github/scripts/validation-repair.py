@@ -12,6 +12,7 @@ import re
 import subprocess
 import zipfile
 
+MAX_REPAIRS = 10
 TITLE = re.compile(r"Validate upstream ([1-9][0-9]*):([1-9][0-9]*)$")
 spec = importlib.util.spec_from_file_location("repair_plan", Path(__file__).with_name("sync-plan.py"))
 plans = importlib.util.module_from_spec(spec)
@@ -169,6 +170,9 @@ def resume(sync, run_id, context):
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "validation-failure.json").write_text(json.dumps(
         {"run": url, "plan": plan, "failures": evidence}, ensure_ascii=False, indent=2))
+    if depth >= MAX_REPAIRS:
+        raise sync.conflict_resolver.policy.ReviewRequired(
+            f"Validation still fails after {MAX_REPAIRS} repairs. Candidate: {head}. Logs: {url}")
     resolver = sync.conflict_resolver.Resolver(task=f"{repo}:{base}:{upstream}:validation:{head}")
     key = pending_key(base, head)
     resolver.state.remember(key, resolver.task, failed_run=str(run_id))
