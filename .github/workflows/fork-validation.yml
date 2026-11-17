@@ -5,10 +5,6 @@ on:
     branches: [dev]
   workflow_call:
     inputs:
-      full:
-        description: Validate Full build, unit tests and lint before merging
-        type: boolean
-        default: false
       ref:
         required: true
         type: string
@@ -18,34 +14,19 @@ permissions:
 
 jobs:
   android:
-    name: Lite build, tests and lint
+    name: ${{ matrix.edition }} build, tests and lint
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [Lite, Full]
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: 2
           persist-credentials: false
-      - name: Select validation scope
-        id: scope
-        env:
-          REQUESTED_FULL: ${{ inputs.full && 'true' || 'false' }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [[ -n "$PR_BASE" ]]; then
-            python3 .github/scripts/validation-scope.py --base "$PR_BASE" --head HEAD >> "$GITHUB_OUTPUT"
-          else
-            echo "full=$REQUESTED_FULL" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Check out native submodules for Full validation
-        if: steps.scope.outputs.full == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: 2
-          submodules: recursive
-          persist-credentials: false
+          submodules: ${{ matrix.edition == 'Full' && 'recursive' || 'false' }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -63,28 +44,23 @@ jobs:
         run: |
           python3 -m unittest discover -s .github/scripts/tests -v
           python3 .github/scripts/check-fork-invariants.py
-      - name: Build Lite Debug
+      - name: Verify upstream dictionary distribution and release tools
+        run: |
+          python3 tools/classified-dictionaries/prepare.py --check
+          python3 -m unittest discover -s tools/release -v
+      - name: Build ${{ matrix.edition }} Debug
         id: build
-        run: ./gradlew :app:assembleLiteStandardDebug --stacktrace --no-daemon --max-workers=2
+        run: ./gradlew :app:assemble${{ matrix.edition }}StandardDebug --stacktrace --no-daemon --max-workers=2
       - name: Run app unit tests
-        run: ./gradlew :app:testLiteStandardDebugUnitTest --stacktrace --no-daemon --max-workers=2
+        run: ./gradlew :app:test${{ matrix.edition }}StandardDebugUnitTest --stacktrace --no-daemon --max-workers=2
       - name: Run Android Lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: ./gradlew :app:lintLiteStandardDebug --stacktrace --no-daemon --max-workers=2
-      - name: Build Full Debug
-        if: steps.scope.outputs.full == 'true'
-        run: ./gradlew :app:assembleFullStandardDebug --stacktrace --no-daemon --max-workers=1
-      - name: Run Full unit tests
-        if: steps.scope.outputs.full == 'true'
-        run: ./gradlew :app:testFullStandardDebugUnitTest --stacktrace --no-daemon --max-workers=1
-      - name: Run Full Lint
-        if: steps.scope.outputs.full == 'true'
-        run: ./gradlew :app:lintFullStandardDebug --stacktrace --no-daemon --max-workers=1
+        run: ./gradlew :app:lint${{ matrix.edition }}StandardDebug --stacktrace --no-daemon --max-workers=2
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fork-validation-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.ref || github.sha }}
+          name: fork-validation-${{ matrix.edition }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.ref || github.sha }}
           path: |
             app/build/reports/
             app/build/test-results/

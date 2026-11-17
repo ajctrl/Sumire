@@ -5,6 +5,11 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import com.kazumaproject.markdownhelperkeyboard.keyboard_presentation.KeyboardTrialSession
+import com.kazumaproject.markdownhelperkeyboard.keyboard_presentation.KeyboardTrialDialog
+import com.kazumaproject.markdownhelperkeyboard.keyboard_presentation.currentKeyboardPreviewTarget
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -74,7 +79,9 @@ class CandidateViewHeightSettingFragment : Fragment() {
     private val maxCandidateTextSize = 40f
     private val defaultCandidateTextSize = 14.0f
 
-    private val previewCandidates = createCandidateHeightPreviewCandidates()
+    @Inject lateinit var shortcutRepository: com.kazumaproject.markdownhelperkeyboard.repository.ShortcutRepository
+    private var realShortcuts = emptyList<ShortcutType>()
+    private var previewCandidates = emptyList<com.kazumaproject.markdownhelperkeyboard.converter.candidate.Candidate>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,6 +106,9 @@ class CandidateViewHeightSettingFragment : Fragment() {
 
         setupMenu()
         setupAdapter()
+        suggestionAdapter.setShowCharacterIndicators(appPreference.candidate_character_type_indicators_preference)
+        suggestionAdapter.setShowCharacterTypeLabels(appPreference.candidate_character_type_labels_preference)
+        suggestionAdapter.setCharacterIndicatorStyles(appPreference.candidateIndicatorStyles)
         suggestionAdapter.setShowDictionaryCandidateLabels(
             appPreference.show_dictionary_candidate_labels_preference
         )
@@ -110,7 +120,34 @@ class CandidateViewHeightSettingFragment : Fragment() {
         setupHeightEditText()
         setupCandidateLetterSizeSeekBar()
         setupCandidateLetterSizeEditText()
+        viewLifecycleOwner.lifecycleScope.launch {
+            realShortcuts = shortcutRepository.getShortcutsForBackup()
+            updateShortcutToolbarPreview()
+        }
         setupKeyboardPreview()
+        binding.previewCanvas.addView(android.widget.LinearLayout(requireContext()).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER_HORIZONTAL
+            val padding = (16 * resources.displayMetrics.density).toInt()
+            setPadding(padding, 0, padding, 0)
+            addView(MaterialTextView(requireContext()).apply {
+                setText(R.string.keyboard_preview_trial_candidate_note)
+                gravity = android.view.Gravity.CENTER
+            })
+            addView(com.google.android.material.button.MaterialButton(requireContext()).apply {
+                setText(R.string.keyboard_preview_try)
+                setOnClickListener { viewLifecycleOwner.lifecycleScope.launch {
+                    KeyboardTrialDialog.show(childFragmentManager, currentKeyboardPreviewTarget(requireContext()))
+                } }
+            })
+        }, android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.TOP))
+        viewLifecycleOwner.lifecycleScope.launch {
+            KeyboardTrialSession.candidates.collect { result ->
+                previewCandidates = result?.candidates.orEmpty()
+                if (isCandidateListVisible) suggestionAdapter.suggestions = previewCandidates
+            }
+        }
+
         setSuggestionView()
 
         applyCandidateTextSize(appPreference.candidate_letter_size ?: defaultCandidateTextSize, persist = false)
@@ -137,6 +174,7 @@ class CandidateViewHeightSettingFragment : Fragment() {
             parentFragmentManager.popBackStack()
         }
         binding.toolbar.inflateMenu(R.menu.fragment_reset_menu)
+        binding.toolbar.menu.findItem(R.id.action_reset)?.setTitle(R.string.candidate_display_reset_height)
         binding.toolbar.setOnMenuItemClickListener { menuItem ->
             when (menuItem.itemId) {
                 R.id.action_candidate_default_height -> {
@@ -253,6 +291,9 @@ class CandidateViewHeightSettingFragment : Fragment() {
     }
 
     private fun applyCandidateAdapterPresentation() {
+        suggestionAdapter.setShowCharacterIndicators(appPreference.candidate_character_type_indicators_preference)
+        suggestionAdapter.setShowCharacterTypeLabels(appPreference.candidate_character_type_labels_preference)
+        suggestionAdapter.setCharacterIndicatorStyles(appPreference.candidateIndicatorStyles)
         suggestionAdapter.setKeyboardFont(com.kazumaproject.core.ui.font.KeyboardFontApplicator.processSnapshot)
         suggestionAdapter.setCandidateYomiMode(appPreference.live_conversion_candidate_yomi_mode)
         suggestionAdapter.setCandidateYomiTextSize(appPreference.live_conversion_candidate_yomi_size.toFloat())
@@ -788,14 +829,7 @@ class CandidateViewHeightSettingFragment : Fragment() {
         )
     }
 
-    private fun previewShortcutItems(): List<ShortcutType> =
-        listOf(
-            ShortcutType.SETTINGS,
-            ShortcutType.EMOJI,
-            ShortcutType.TEMPLATE,
-            ShortcutType.KEYBOARD_PICKER,
-            ShortcutType.PASTE
-        )
+    private fun previewShortcutItems(): List<ShortcutType> = realShortcuts
 
     private fun populateShortcutToolbarPreview(container: LinearLayout) {
         container.removeAllViews()
@@ -837,6 +871,7 @@ class CandidateViewHeightSettingFragment : Fragment() {
                 container = binding.keyboardPreviewContainer,
                 tenKey = binding.candidateHeightSettingTenkeyPreview,
                 gojuon = binding.candidateHeightSettingGojuonPreview,
+                morse = binding.candidateHeightSettingMorsePreview,
                 qwerty = binding.candidateHeightSettingQwertyPreview,
                 flick = binding.candidateHeightSettingFlickPreview
             ),

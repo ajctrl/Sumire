@@ -1,0 +1,33 @@
+name: Resume failed upstream validation
+
+on:
+  workflow_run:
+    workflows: [Validate and publish upstream update]
+    types: [completed]
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  resume:
+    if: >-
+      github.repository == 'ajctrl/Sumire' &&
+      contains(fromJSON('["failure", "timed_out"]'), github.event.workflow_run.conclusion) &&
+      github.event.workflow_run.path == '.github/workflows/sync-upstream.yml' &&
+      github.event.workflow_run.event == 'workflow_run' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      # Dispatch starts a new cycle instead of exceeding workflow_run chain limits.
+      # The preparation job revalidates provenance, PR/base SHA and failure scope.
+      - name: Start a separate repair run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          FAILED_RUN: ${{ github.event.workflow_run.id }}
+        run: >-
+          gh workflow run prepare-upstream-sync.yml --repo "$REPOSITORY" --ref dev
+          -f failed_validation_run="$FAILED_RUN"

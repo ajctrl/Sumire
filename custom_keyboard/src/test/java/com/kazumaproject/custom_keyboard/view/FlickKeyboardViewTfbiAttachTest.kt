@@ -7,7 +7,6 @@ import android.view.ContextThemeWrapper
 import android.view.MotionEvent
 import androidx.test.core.app.ApplicationProvider
 import com.kazumaproject.core.data.popup.TfbiPopupPresentationMode
-import com.kazumaproject.custom_keyboard.controller.TfbiHierarchicalFlickController
 import com.kazumaproject.custom_keyboard.controller.TfbiStickyFlickController
 import com.kazumaproject.custom_keyboard.data.KeyAction
 import com.kazumaproject.custom_keyboard.data.KeyData
@@ -40,19 +39,7 @@ class FlickKeyboardViewTfbiAttachTest {
         assertNotNull(keyboard.findControllerForLabel("な", TfbiInputController::class.java))
     }
 
-    @Test
-    fun thirdFlickAttachesControllerToNaKey() {
-        val layout = createLayout("third-flick")
-        val keyboard = createView()
 
-        keyboard.setKeyboard(layout)
-
-        assertNotNull(layout.hierarchicalFlickMaps["な"])
-        assertEquals(11, controllersOf<TfbiHierarchicalFlickController>(keyboard).size)
-        assertNotNull(
-            keyboard.findControllerForLabel("な", TfbiHierarchicalFlickController::class.java)
-        )
-    }
 
     @Test
     fun stickyTfbiGuideReceivesCustomThemePopupColors() {
@@ -117,14 +104,7 @@ class FlickKeyboardViewTfbiAttachTest {
         assertEquals(0.5f, state.fingerPosition?.y ?: -1f, 0.001f)
     }
 
-    @Test
-    fun thirdFlickGuideShowsNaOnTouchDown() {
-        val state = touchDownState("third-flick", TfbiHierarchicalFlickController::class.java)
 
-        assertEquals("な", state.currentText)
-        assertEquals(0.5f, state.fingerPosition?.x ?: -1f, 0.001f)
-        assertEquals(0.5f, state.fingerPosition?.y ?: -1f, 0.001f)
-    }
 
     @Test
     fun secondFlickGuideTracksFingerPosition() {
@@ -134,96 +114,11 @@ class FlickKeyboardViewTfbiAttachTest {
         assertEquals(0.5f, state.fingerPosition?.y ?: -1f, 0.001f)
     }
 
-    @Test
-    fun thirdFlickGuideTracksFingerPosition() {
-        val state = touchStateAfterLeftFlick(
-            "third-flick",
-            TfbiHierarchicalFlickController::class.java
-        )
 
-        assertEquals(0f, state.fingerPosition?.x ?: -1f, 0.001f)
-        assertEquals(0.5f, state.fingerPosition?.y ?: -1f, 0.001f)
-    }
 
-    @Test
-    fun thirdFlickGuideShowsNaStageCharacterOnLeftFlick() {
-        val state = touchStateAfterLeftFlick(
-            "third-flick",
-            TfbiHierarchicalFlickController::class.java
-        )
 
-        assertEquals("に", state.currentText)
-    }
 
-    @Test
-    fun legacyPopupRefreshesAfterParentContinuationToSiblingInput() {
-        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
-        val keyboard = FlickKeyboardView(
-            ContextThemeWrapper(
-                activity,
-                com.google.android.material.R.style.Theme_Material3_DayNight_NoActionBar
-            )
-        ).apply {
-            setKeyboard(createLayout("third-flick"))
-        }
-        activity.setContentView(keyboard)
-        keyboard.measure(exactly(1080), exactly(1000))
-        keyboard.layout(0, 0, 1080, 1000)
 
-        val naButton = (0 until keyboard.childCount)
-            .map { keyboard.getChildAt(it) }
-            .filterIsInstance<AutoSizeButton>()
-            .first { it.text.toString() == "な" }
-        val centerX = naButton.width / 2f
-        val centerY = naButton.height / 2f
-        val down = MotionEvent.obtain(0L, 0L, MotionEvent.ACTION_DOWN, centerX, centerY, 0)
-        val firstMove = MotionEvent.obtain(0L, 10L, MotionEvent.ACTION_MOVE, 0f, centerY, 0)
-        val yoonMove = MotionEvent.obtain(
-            0L,
-            20L,
-            MotionEvent.ACTION_MOVE,
-            centerX,
-            naButton.height.toFloat(),
-            0
-        )
-        val siblingMove = MotionEvent.obtain(
-            0L,
-            30L,
-            MotionEvent.ACTION_MOVE,
-            naButton.width.toFloat(),
-            centerY,
-            0
-        )
-
-        val controller = findControllerForLabel(
-            "な",
-            TfbiHierarchicalFlickController::class.java,
-            keyboard
-        ) as TfbiHierarchicalFlickController
-        try {
-            assertNotNull(naButton.dispatchTouchEvent(down))
-            assertNotNull(naButton.dispatchTouchEvent(firstMove))
-            assertNotNull(naButton.dispatchTouchEvent(yoonMove))
-            assertNotNull(naButton.dispatchTouchEvent(siblingMove))
-
-            val popupView = controller::class.java.getDeclaredField("popupView").apply {
-                isAccessible = true
-            }.get(controller)
-            assertNotNull(popupView)
-            val petalCharacters = popupView!!::class.java
-                .getDeclaredField("petalCharacters")
-                .apply { isAccessible = true }
-                .get(popupView) as Map<*, *>
-
-            assertEquals("にゃ", petalCharacters[TfbiFlickDirection.RIGHT])
-        } finally {
-            down.recycle()
-            firstMove.recycle()
-            yoonMove.recycle()
-            siblingMove.recycle()
-            controller.cancel()
-        }
-    }
 
     @Test
     fun secondFlickGuideUsesGuideCellForSecondStage() {
@@ -238,18 +133,7 @@ class FlickKeyboardViewTfbiAttachTest {
         assertEquals(TfbiFlickDirection.DOWN_LEFT, state.selectedOption)
     }
 
-    @Test
-    fun thirdFlickGuideUsesBottomCenterCellForSecondStage() {
-        val state = touchStateAfterFlickToCell(
-            "third-flick",
-            TfbiHierarchicalFlickController::class.java,
-            targetX = 0.65f,
-            targetY = 1f
-        )
 
-        assertEquals("しょ", state.currentText)
-        assertEquals("しょ", state.optionLabels[TfbiFlickDirection.DOWN])
-    }
 
     @Test
     fun allBuiltInKanaLayoutVariantsAttachNaController() {
@@ -260,24 +144,11 @@ class FlickKeyboardViewTfbiAttachTest {
                 inputLayoutType = layoutType,
                 inputStyle = "second-flick"
             )
-            val thirdLayout = KeyboardDefaultLayouts.createFinalLayout(
-                mode = KeyboardInputMode.HIRAGANA,
-                dynamicKeyStates = emptyMap(),
-                inputLayoutType = layoutType,
-                inputStyle = "third-flick"
-            )
-
             assertNotNull("$layoutType second-flick na map", secondLayout.twoStepFlickKeyMaps["な"])
-            assertNotNull("$layoutType third-flick na map", thirdLayout.hierarchicalFlickMaps["な"])
             assertEquals(
                 "$layoutType second-flick key type",
                 KeyType.TWO_STEP_FLICK,
                 secondLayout.keys.first { it.label == "な" }.keyType
-            )
-            assertEquals(
-                "$layoutType third-flick key type",
-                KeyType.HIERARCHICAL_FLICK,
-                thirdLayout.keys.first { it.label == "な" }.keyType
             )
         }
     }
@@ -501,7 +372,6 @@ class FlickKeyboardViewTfbiAttachTest {
         val field = FlickKeyboardView::class.java.getDeclaredField(
             when (T::class) {
                 TfbiInputController::class -> "tfbiControllers"
-                TfbiHierarchicalFlickController::class -> "hierarchicalTfbiControllers"
                 else -> error("Unsupported controller type")
             }
         ).apply { isAccessible = true }

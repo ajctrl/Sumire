@@ -1,5 +1,8 @@
 package com.kazumaproject.custom_keyboard.layout
 
+import com.kazumaproject.core.data.qwerty.QWERTYKeys
+import com.kazumaproject.core.domain.qwerty.QWERTYKeyInfo
+import com.kazumaproject.core.domain.qwerty.QWERTYKeyMap
 import com.kazumaproject.custom_keyboard.data.FlickAction
 import com.kazumaproject.custom_keyboard.data.FlickDirection
 import com.kazumaproject.custom_keyboard.data.DoubleTapBinding
@@ -12,9 +15,11 @@ import com.kazumaproject.custom_keyboard.data.KeyType
 import com.kazumaproject.custom_keyboard.data.KeyboardInputMode
 import com.kazumaproject.custom_keyboard.data.KeyboardLayout
 import com.kazumaproject.custom_keyboard.data.KeyboardLayoutItem
+import com.kazumaproject.custom_keyboard.data.QwertyKeyConfig
+import com.kazumaproject.custom_keyboard.data.QwertyKeyLayer
+import com.kazumaproject.custom_keyboard.data.QwertyPopupSlot
 import com.kazumaproject.custom_keyboard.data.SpacerItem
 import com.kazumaproject.custom_keyboard.data.TfbiFlickRotation
-import com.kazumaproject.custom_keyboard.data.SumireFlickInputMode
 import com.kazumaproject.custom_keyboard.data.copyWithItems
 import com.kazumaproject.custom_keyboard.data.copyWithKeys
 import com.kazumaproject.custom_keyboard.view.TfbiFlickDirection
@@ -158,6 +163,7 @@ object KeyboardDefaultLayouts {
      * Creates the final keyboard layout based on the mode and dynamic key states.
      * @param mode The keyboard input mode (HIRAGANA, ENGLISH, etc.).
      * @param dynamicKeyStates A map of dynamic key states [keyId: String, stateIndex: Int].
+     * @param highlightSelectedMode Retain the built-in mode selection highlight.
      * @return The final, state-applied KeyboardLayout.
      */
     fun createFinalLayout(
@@ -167,8 +173,19 @@ object KeyboardDefaultLayouts {
         inputStyle: String,
         deleteKeyFlickSettings: DeleteKeyFlickSettings = DeleteKeyFlickSettings(),
         tfbiFlickRotation: TfbiFlickRotation = TfbiFlickRotation.DEFAULT,
-        sumireFlickInputMode: SumireFlickInputMode = SumireFlickInputMode.ALL
+        highlightSelectedMode: Boolean = true
     ): KeyboardLayout {
+        if (inputStyle == com.kazumaproject.custom_keyboard.data.SumirePopupDefaults.STYLE) {
+            val base = createFinalLayout(mode, dynamicKeyStates, inputLayoutType, "default", deleteKeyFlickSettings, tfbiFlickRotation, highlightSelectedMode)
+            if (mode != KeyboardInputMode.HIRAGANA) return base
+            return base.copyWithKeys(base.keys.map { key ->
+                if (!key.isSpecialKey && key.label in com.kazumaproject.custom_keyboard.data.SumirePopupDefaults.rows) {
+                    key.copy(keyId = "popup-kana-${key.label}", keyType = KeyType.FREE_FLICK,
+                        textInputBehavior = com.kazumaproject.custom_keyboard.data.KeyTextInputBehavior.NORMAL,
+                        popupMapConfig = com.kazumaproject.custom_keyboard.data.SumirePopupDefaults.create(key.label))
+                } else key
+            })
+        }
         val baseLayout = when (inputLayoutType) {
             "toggle" -> {
                 when (mode) {
@@ -267,19 +284,23 @@ object KeyboardDefaultLayouts {
             }
         }
 
-        var finalLayout = if (mode == KeyboardInputMode.HIRAGANA &&
-            (inputStyle == "second-flick" || inputStyle == "third-flick")
-        ) {
-            val effectiveInputMode = if (inputStyle == "third-flick") sumireFlickInputMode
-                else SumireFlickInputMode.ALL
-            val filteredLayout = SumireFlickInputModeMapper.apply(baseLayout, effectiveInputMode)
-            if (effectiveInputMode == SumireFlickInputMode.CONTRACTED) filteredLayout
-            else SumireFlickRotationMapper.apply(filteredLayout, tfbiFlickRotation)
+        var finalLayout = if (mode == KeyboardInputMode.HIRAGANA && inputStyle == "second-flick") {
+            SumireFlickRotationMapper.apply(baseLayout, tfbiFlickRotation)
         } else {
             baseLayout
         }
         dynamicKeyStates.forEach { (keyId, stateIndex) ->
             finalLayout = applyKeyState(finalLayout, keyId, stateIndex)
+        }
+
+        if (!highlightSelectedMode) {
+            finalLayout = finalLayout.copyWithKeys(finalLayout.keys.map { key ->
+                when (key.action) {
+                    KeyAction.SwitchToKanaLayout, KeyAction.SwitchToEnglishLayout,
+                    KeyAction.SwitchToNumberLayout -> key.copy(isHiLighted = false)
+                    else -> key
+                }
+            })
         }
 
         return ensureSumireSpecialKeyCrossFlickAttach(
@@ -4737,9 +4758,10 @@ object KeyboardDefaultLayouts {
         val columnSpanUnits: Int
     }
 
-    /** Plain character key (label is also the typed text). */
+    /** Character key with the standard QWERTY tap and long-press layers. */
     private data class CharKeySpec(
         val label: String,
+        val qwertyConfig: QwertyKeyConfig,
         override val columnSpanUnits: Int = 2
     ) : TemplateItemSpec
 
@@ -4802,9 +4824,10 @@ object KeyboardDefaultLayouts {
                             action = KeyAction.Text(itemSpec.label),
                             rowSpan = approxRowSpan,
                             colSpan = approxColSpan,
-                            keyType = KeyType.NORMAL,
+                            keyType = KeyType.QWERTY,
                             isSpecialKey = false,
-                            keyId = keyId
+                            keyId = keyId,
+                            qwertyConfig = itemSpec.qwertyConfig
                         )
                         items += KeyItem(id = keyId, keyData = keyData, placement = placement)
                         keys += keyData
@@ -4855,7 +4878,18 @@ object KeyboardDefaultLayouts {
         )
     }
 
-    private fun chars(vararg s: String): List<CharKeySpec> = s.map { CharKeySpec(it) }
+    private fun QWERTYKeyInfo.QWERTYVariation.toTemplateConfig(): QwertyKeyConfig {
+        fun layer(output: Char, candidates: List<Char>?) = QwertyKeyLayer(
+            output = output.toString(),
+            columns = candidates.orEmpty().size.coerceIn(1, 3),
+            slots = candidates.orEmpty().map { QwertyPopupSlot(output = it.toString()) }
+        )
+        val tap = requireNotNull(tap)
+        return QwertyKeyConfig(
+            normal = layer(tap, variations),
+            shifted = layer(capChar ?: tap, capVariations ?: variations)
+        )
+    }
 
     private val shiftSpec
         get() = SpecialKeySpec(
@@ -4906,33 +4940,66 @@ object KeyboardDefaultLayouts {
      *   Row 2: Shift | spacer | z x c v b n m | spacer | Delete
      *   Row 3: SwitchIme | Space | Enter
      */
-    fun createQwertyTemplateLayout(): KeyboardLayout {
+    fun createQwertyTemplateLayout(): KeyboardLayout = QWERTYKeyMap().let { keyMap ->
+        createQwertyTemplate(
+            "qwerty", "QWERTY", QWERTYKeys.DEFAULT_KEYS, middleRowSize = 9,
+            keyMap.keysDefault.map(keyMap::getKeyInfoDefault)
+        )
+    }
+
+    fun createQwertyNumberTemplateLayout(): KeyboardLayout = QWERTYKeyMap().let { keyMap ->
+        createQwertyTemplate(
+            "qwerty_number", "QWERTY (Numbers)", QWERTYKeys.NUMBER_KEYS, middleRowSize = 10,
+            keyMap.keysNumber.map(keyMap::getKeyInfoNumber)
+        )
+    }
+
+    fun createQwertySymbolTemplateLayout(): KeyboardLayout = QWERTYKeyMap().let { keyMap ->
+        createQwertyTemplate(
+            "qwerty_symbol", "QWERTY (Symbols)", QWERTYKeys.SYMBOL_KEYS, middleRowSize = 10,
+            keyMap.keysSymbol.map(keyMap::getKeyInfoSymbol)
+        )
+    }
+
+    private fun createQwertyTemplate(
+        idPrefix: String,
+        name: String,
+        characters: List<Char>,
+        middleRowSize: Int,
+        keyInfos: List<QWERTYKeyInfo>
+    ): KeyboardLayout {
+        val configs = keyInfos.filterIsInstance<QWERTYKeyInfo.QWERTYVariation>()
+            .filter { it.tap != null }
+            .associate { it.tap!! to it.toTemplateConfig() }
+        fun chars(characters: List<Char>) = characters.map { char ->
+            CharKeySpec(char.toString(), configs.getValue(char))
+        }
+        val bottomRow = characters.drop(10 + middleRowSize)
+        val bottomGap = (16 - bottomRow.size * 2) / 2
         val spec = TemplateLayoutSpec(
-            idPrefix = "qwerty",
-            name = "QWERTY",
+            idPrefix = idPrefix,
+            name = name,
             rowUnitCount = 8,
             columnUnitCount = 20,
             rows = listOf(
                 TemplateRowSpec(
                     rowUnits = 0,
-                    items = listOf(
-                        *chars("q", "w", "e", "r", "t", "y", "u", "i", "o", "p").toTypedArray()
-                    )
+                    items = chars(characters.take(10))
                 ),
                 TemplateRowSpec(
                     rowUnits = 2,
-                    items = listOf(
-                        SpacerSpec("row1_gap", columnSpanUnits = 1),
-                        *chars("a", "s", "d", "f", "g", "h", "j", "k", "l").toTypedArray()
-                    )
+                    items = buildList {
+                        if (middleRowSize == 9) add(SpacerSpec("row1_gap", columnSpanUnits = 1))
+                        addAll(chars(characters.drop(10).take(middleRowSize)))
+                    }
                 ),
                 TemplateRowSpec(
                     rowUnits = 4,
                     items = listOf(
                         shiftSpec,
-                        SpacerSpec("shift_gap", columnSpanUnits = 1),
-                        *chars("z", "x", "c", "v", "b", "n", "m").toTypedArray(),
-                        SpacerSpec("delete_gap", columnSpanUnits = 1),
+                        SpacerSpec("shift_gap", columnSpanUnits = bottomGap),
+                        *chars(bottomRow).toTypedArray(),
+                        SpacerSpec("delete_gap", columnSpanUnits = bottomGap),
                         deleteSpec
                     )
                 ),
@@ -5006,7 +5073,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5016,7 +5082,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5026,7 +5091,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5036,7 +5100,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5046,7 +5109,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5056,7 +5118,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5066,7 +5127,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5076,7 +5136,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5086,7 +5145,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5105,7 +5163,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5115,7 +5172,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -5532,133 +5588,7 @@ object KeyboardDefaultLayouts {
                 KeyboardLayout(keys, flickMaps, 5, 4, twoStepFlickKeyMaps = twoStepFlickMaps)
             }
 
-            "third-flick" -> {
 
-                val pasteActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Paste,
-                        drawableResId = com.kazumaproject.core.R.drawable.content_paste_24px
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.SelectAll,
-                        drawableResId = com.kazumaproject.core.R.drawable.text_select_start_24dp
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.Copy,
-                        drawableResId = com.kazumaproject.core.R.drawable.content_copy_24dp
-                    )
-                )
-
-                val cursorLeftActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.MoveCursorLeft,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_left_alt_24
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_right_alt_24
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.MoveCursorLeft,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_left_alt_24
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.MoveCursorUp,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_upward_alt_24
-                    ), FlickDirection.DOWN to FlickAction.Action(
-                        KeyAction.MoveCursorDown,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_downward_alt_24
-                    )
-                )
-
-                val cursorRightActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_right_alt_24
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_right_alt_24
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.MoveCursorLeft,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_left_alt_24
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.MoveCursorUp,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_upward_alt_24
-                    ), FlickDirection.DOWN to FlickAction.Action(
-                        KeyAction.MoveCursorDown,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_downward_alt_24
-                    )
-                )
-
-                val spaceActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Space,
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.Space,
-                        drawableResId = com.kazumaproject.core.R.drawable.baseline_space_bar_24
-
-                    )
-                )
-
-                val conversionActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Convert,
-                    ),
-                )
-
-                // 状態0 (^_^): タップ操作のみを持つマップ
-                val emojiStateFlickMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.InputText("^_^"), label = "^_^"
-                    )
-                    // この状態ではフリックアクションを定義しない
-                )
-                // 状態1 ( 小゛゜): タップとフリック操作を持つマップ
-                val dakutenStateFlickMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.ToggleDakuten, label = " 小゛゜"
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.InputText("ひらがな小文字"), label = "小"
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.InputText("濁点"), label = "゛"
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.InputText("半濁点"), label = "゜"
-                    )
-                )
-
-                val flickMaps: MutableMap<String, List<Map<FlickDirection, FlickAction>>> =
-                    if (deleteKeyFlickSettings.hasFlickActions) {
-                        val deleteActionMap = createDeleteActionMap(deleteKeyFlickSettings)
-                        mutableMapOf(
-                            "PasteActionKey" to listOf(pasteActionMap),
-                            "CursorMoveLeft" to listOf(cursorLeftActionMap),
-                            "CursorMoveRight" to listOf(cursorRightActionMap),
-                            "Del" to listOf(deleteActionMap)
-                        )
-                    } else {
-                        mutableMapOf(
-                            "PasteActionKey" to listOf(pasteActionMap),
-                            "CursorMoveLeft" to listOf(cursorLeftActionMap),
-                            "CursorMoveRight" to listOf(cursorRightActionMap),
-                        )
-                    }
-
-                dakutenToggleStates.getOrNull(0)?.label?.let { label ->
-                    flickMaps.put(label, listOf(emojiStateFlickMap))
-                }
-                dakutenToggleStates.getOrNull(1)?.label?.let { label ->
-                    flickMaps.put(label, listOf(dakutenStateFlickMap))
-                }
-
-                spaceConvertStates.getOrNull(0)?.label?.let { label ->
-                    flickMaps.put(label, listOf(spaceActionMap))
-                }
-
-                spaceConvertStates.getOrNull(1)?.label?.let { label ->
-                    flickMaps.put(label, listOf(conversionActionMap))
-                }
-
-                val hierarchicalFlickMaps = HierarchicalKanaDefaultDefinitions.createFlickMaps()
-
-                return KeyboardLayout(
-                    keys, flickMaps, 5, 4, hierarchicalFlickMaps = hierarchicalFlickMaps
-                )
-            }
 
             "sumire" -> {
                 return createHiraganaLayoutToggle(
@@ -6684,7 +6614,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6694,7 +6623,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6704,7 +6632,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6714,7 +6641,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6724,7 +6650,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6734,7 +6659,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6744,7 +6668,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6754,7 +6677,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6764,7 +6686,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6783,7 +6704,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -6793,7 +6713,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -7215,112 +7134,7 @@ object KeyboardDefaultLayouts {
                 return KeyboardLayout(keys, flickMaps, 5, 4, twoStepFlickKeyMaps = twoStepFlickMaps)
             }
 
-            "third-flick" -> {
 
-                val pasteActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Paste,
-                        drawableResId = com.kazumaproject.core.R.drawable.content_paste_24px
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.SelectAll,
-                        drawableResId = com.kazumaproject.core.R.drawable.text_select_start_24dp
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.Copy,
-                        drawableResId = com.kazumaproject.core.R.drawable.content_copy_24dp
-                    )
-                )
-
-                val cursorMoveActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.baseline_arrow_left_24
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.baseline_arrow_right_24
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.MoveCursorLeft,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_left_alt_24
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.MoveCursorUp,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_upward_alt_24
-                    ), FlickDirection.DOWN to FlickAction.Action(
-                        KeyAction.MoveCursorDown,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_downward_alt_24
-                    )
-                )
-
-                val spaceActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Space,
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.Space,
-                        drawableResId = com.kazumaproject.core.R.drawable.baseline_space_bar_24
-
-                    )
-                )
-
-                val conversionActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Convert,
-                    ),
-                )
-
-                // 状態0 (^_^): タップ操作のみを持つマップ
-                val emojiStateFlickMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.InputText("^_^"), label = "^_^"
-                    )
-                    // この状態ではフリックアクションを定義しない
-                )
-                // 状態1 ( 小゛゜): タップとフリック操作を持つマップ
-                val dakutenStateFlickMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.ToggleDakuten, label = " 小゛゜"
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.InputText("ひらがな小文字"), label = "小"
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.InputText("濁点"), label = "゛"
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.InputText("半濁点"), label = "゜"
-                    )
-                )
-
-                val flickMaps: MutableMap<String, List<Map<FlickDirection, FlickAction>>> =
-                    if (deleteKeyFlickSettings.hasFlickActions) {
-                        val deleteActionMap = createDeleteActionMap(deleteKeyFlickSettings)
-                        mutableMapOf(
-                            "PasteActionKey" to listOf(pasteActionMap),
-                            "CursorMoveLeft" to listOf(cursorMoveActionMap),
-                            "Del" to listOf(deleteActionMap)
-                        )
-                    } else {
-                        mutableMapOf(
-                            "PasteActionKey" to listOf(pasteActionMap),
-                            "CursorMoveLeft" to listOf(cursorMoveActionMap),
-                        )
-                    }
-
-                dakutenToggleStates.getOrNull(0)?.label?.let { label ->
-                    flickMaps.put(label, listOf(emojiStateFlickMap))
-                }
-                dakutenToggleStates.getOrNull(1)?.label?.let { label ->
-                    flickMaps.put(label, listOf(dakutenStateFlickMap))
-                }
-
-                spaceConvertStates.getOrNull(0)?.label?.let { label ->
-                    flickMaps.put(label, listOf(spaceActionMap))
-                }
-
-                spaceConvertStates.getOrNull(1)?.label?.let { label ->
-                    flickMaps.put(label, listOf(conversionActionMap))
-                }
-
-                val hierarchicalFlickMaps = HierarchicalKanaDefaultDefinitions.createFlickMaps()
-
-                return KeyboardLayout(
-                    keys, flickMaps, 5, 4, hierarchicalFlickMaps = hierarchicalFlickMaps
-                )
-            }
 
             "sumire" -> {
                 return createHiraganaLayoutFlick(
@@ -8694,7 +8508,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8704,7 +8517,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8714,7 +8526,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8724,7 +8535,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8734,7 +8544,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8744,7 +8553,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8754,7 +8562,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8764,7 +8571,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8774,7 +8580,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8793,7 +8598,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -8803,7 +8607,6 @@ object KeyboardDefaultLayouts {
                     "default" -> KeyType.PETAL_FLICK
                     "circle" -> KeyType.STANDARD_FLICK
                     "second-flick" -> KeyType.TWO_STEP_FLICK
-                    "third-flick" -> KeyType.HIERARCHICAL_FLICK
                     "center-guide-flick" -> KeyType.CENTER_GUIDE_FLICK
                     "sumire" -> KeyType.CIRCULAR_FLICK
                     else -> KeyType.PETAL_FLICK
@@ -9248,132 +9051,7 @@ object KeyboardDefaultLayouts {
                 return KeyboardLayout(keys, flickMaps, 5, 4, twoStepFlickKeyMaps = twoStepFlickMaps)
             }
 
-            "third-flick" -> {
-                val pasteActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Paste,
-                        drawableResId = com.kazumaproject.core.R.drawable.content_paste_24px
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.SelectAll,
-                        drawableResId = com.kazumaproject.core.R.drawable.text_select_start_24dp
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.Copy,
-                        drawableResId = com.kazumaproject.core.R.drawable.content_copy_24dp
-                    )
-                )
 
-                val cursorLeftActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.MoveCursorLeft,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_left_alt_24
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_right_alt_24
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.MoveCursorLeft,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_left_alt_24
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.MoveCursorUp,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_upward_alt_24
-                    ), FlickDirection.DOWN to FlickAction.Action(
-                        KeyAction.MoveCursorDown,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_downward_alt_24
-                    )
-                )
-
-                val cursorRightActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_right_alt_24
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.MoveCursorRight,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_right_alt_24
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.MoveCursorLeft,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_left_alt_24
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.MoveCursorUp,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_upward_alt_24
-                    ), FlickDirection.DOWN to FlickAction.Action(
-                        KeyAction.MoveCursorDown,
-                        drawableResId = com.kazumaproject.core.R.drawable.outline_arrow_downward_alt_24
-                    )
-                )
-
-                val spaceActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Space,
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.Space,
-                        drawableResId = com.kazumaproject.core.R.drawable.baseline_space_bar_24
-
-                    )
-                )
-
-                val conversionActionMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.Convert,
-                    ),
-                )
-
-                // 状態0 (^_^): タップ操作のみを持つマップ
-                val emojiStateFlickMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.InputText("^_^"), label = "^_^"
-                    )
-                    // この状態ではフリックアクションを定義しない
-                )
-                // 状態1 ( 小゛゜): タップとフリック操作を持つマップ
-                val dakutenStateFlickMap = mapOf(
-                    FlickDirection.TAP to FlickAction.Action(
-                        KeyAction.ToggleDakuten, label = " 小゛゜"
-                    ), FlickDirection.UP to FlickAction.Action(
-                        KeyAction.InputText("ひらがな小文字"), label = "小"
-                    ), FlickDirection.UP_LEFT to FlickAction.Action(
-                        KeyAction.InputText("濁点"), label = "゛"
-                    ), FlickDirection.UP_RIGHT to FlickAction.Action(
-                        KeyAction.InputText("半濁点"), label = "゜"
-                    )
-                )
-
-                val flickMaps: MutableMap<String, List<Map<FlickDirection, FlickAction>>> =
-                    if (deleteKeyFlickSettings.hasFlickActions) {
-                        val deleteActionMap = createDeleteActionMap(deleteKeyFlickSettings)
-                        mutableMapOf(
-                            "PasteActionKey" to listOf(pasteActionMap),
-                            "CursorMoveLeft" to listOf(cursorLeftActionMap),
-                            "CursorMoveRight" to listOf(cursorRightActionMap),
-                            "Del" to listOf(deleteActionMap)
-                        )
-                    } else {
-                        mutableMapOf(
-                            "PasteActionKey" to listOf(pasteActionMap),
-                            "CursorMoveLeft" to listOf(cursorLeftActionMap),
-                            "CursorMoveRight" to listOf(cursorRightActionMap),
-                        )
-                    }
-
-                dakutenToggleStates.getOrNull(0)?.label?.let { label ->
-                    flickMaps.put(label, listOf(emojiStateFlickMap))
-                }
-                dakutenToggleStates.getOrNull(1)?.label?.let { label ->
-                    flickMaps.put(label, listOf(dakutenStateFlickMap))
-                }
-
-                spaceConvertStates.getOrNull(0)?.label?.let { label ->
-                    flickMaps.put(label, listOf(spaceActionMap))
-                }
-
-                spaceConvertStates.getOrNull(1)?.label?.let { label ->
-                    flickMaps.put(label, listOf(conversionActionMap))
-                }
-
-                val hierarchicalFlickMaps = HierarchicalKanaDefaultDefinitions.createFlickMaps()
-
-                return KeyboardLayout(
-                    keys, flickMaps, 5, 4, hierarchicalFlickMaps = hierarchicalFlickMaps
-                )
-            }
 
             "sumire" -> {
                 return createHiraganaLayoutEffective(

@@ -1,5 +1,20 @@
 name: Sync upstream with resumable API repairs
 description: Run trusted sync code with the Actions artifact runtime credentials.
+outputs:
+  review_required:
+    description: Whether human review blocks this update
+  full_validation:
+    description: Whether an update requires the mandatory Full checks
+  changed:
+    description: Whether a candidate is ready for validation
+  paused:
+    description: Whether this run stopped without validation or publication
+  head:
+    description: Exact candidate SHA
+  base:
+    description: Exact dev SHA
+  pr:
+    description: Update pull request number
 runs:
   using: node24
   main: index.cjs

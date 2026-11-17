@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '23 3 * * *'
   workflow_dispatch:
+    inputs:
+      failed_validation_run:
+        description: Completed validation run to repair (empty for a new sync)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -46,6 +51,7 @@ jobs:
         uses: ./.github/actions/sync-upstream
         env:
           GH_TOKEN: ${{ github.token }}
+          SUMIRE_FAILED_VALIDATION_RUN: ${{ inputs.failed_validation_run }}
           SUMIRE_CODEX_BIN: /usr/local/bin/codex
           SUMIRE_CODEX_USER: sumire-codex
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

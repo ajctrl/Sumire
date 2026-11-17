@@ -1,5 +1,6 @@
 package com.kazumaproject.markdownhelperkeyboard.custom_keyboard.import_export
 
+import com.kazumaproject.custom_keyboard.data.PopupKeyConfigCodec
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -8,6 +9,7 @@ import com.google.gson.reflect.TypeToken
 import com.kazumaproject.custom_keyboard.data.CircularFlickDirection
 import com.kazumaproject.custom_keyboard.data.FlickDirection
 import com.kazumaproject.custom_keyboard.data.KeyActionMapper
+import com.kazumaproject.custom_keyboard.data.QwertyKeyConfigCodec
 import com.kazumaproject.custom_keyboard.data.KeyType
 import com.kazumaproject.custom_keyboard.data.KeyTextInputBehavior
 import com.kazumaproject.custom_keyboard.data.KeyIconBuiltInDrawable
@@ -288,6 +290,18 @@ object KeyboardBackupNormalizer {
                 return@mapIndexedNotNull null
             }
 
+            val qwertyConfig = QwertyKeyConfigCodec.decode(keyDto.qwerty?.toString())
+            if (keyDto.keyType == KeyType.QWERTY.name && qwertyConfig == null) {
+                errors += KeyboardLayoutImportError.ValidationFailed(layoutIndex,
+                    "Invalid QWERTY configuration for key ${keyIndex + 1}")
+                return@mapIndexedNotNull null
+            }
+            val freeFlickConfig = PopupKeyConfigCodec.decode(keyDto.freeFlick?.toString())
+            if (keyDto.keyType == KeyType.FREE_FLICK.name && freeFlickConfig == null) {
+                errors += KeyboardLayoutImportError.ValidationFailed(layoutIndex,
+                    "Invalid Free Flick configuration for key ${keyIndex + 1}")
+                return@mapIndexedNotNull null
+            }
             val identifier = keyDto.keyIdentifier
                 ?.takeIf { it.isNotBlank() && it !in usedKeyIdentifiers }
                 ?: UUID.randomUUID().toString().also {
@@ -372,6 +386,9 @@ object KeyboardBackupNormalizer {
                     .dbValue,
                 doubleTapAction = normalizedDoubleTapAction,
                 doubleTapPolicy = normalizedDoubleTapPolicy,
+                popupMapConfigJson = freeFlickConfig?.takeIf { keyDto.keyType == KeyType.FREE_FLICK.name }
+                    ?.copy(keyId = identifier)?.let(PopupKeyConfigCodec::encode),
+                qwertyConfigJson = qwertyConfig?.let(QwertyKeyConfigCodec::encode),
                 textInputBehavior = KeyTextInputBehavior
                     .fromDbValue(keyDto.textInputBehavior)
                     .dbValue

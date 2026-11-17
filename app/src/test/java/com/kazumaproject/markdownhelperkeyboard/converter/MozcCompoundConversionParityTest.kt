@@ -18,6 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import java.io.BufferedInputStream
@@ -153,6 +154,9 @@ internal object TestEngineFactory {
     ): KanaKanjiEngine {
         val englishEngine = mock<EnglishEngine>()
         whenever(englishEngine.getCandidates(any(), any())).thenReturn(emptyList<Candidate>())
+        // Keep literal variants supplied by the Japanese engine while excluding English dictionaries.
+        whenever(englishEngine.getConversionCandidates(any(), anyOrNull(), any(), any(), any(), any()))
+            .thenAnswer { it.getArgument<List<Candidate>>(5) }
 
         val system = loadTriple("system/tango.dat.zip", "system/yomi.dat.zip", "system/token.dat.zip")
         val singleKanji = loadTriple(

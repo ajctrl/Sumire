@@ -233,6 +233,7 @@ class MergeTests(unittest.TestCase):
         self.git("push", "origin", "dev")
         base = self.git("rev-parse", "HEAD")
         client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
         def repair(conflicts, overview=None):
             for path, _ in conflicts:
                 Path(path).write_text("fork and upstream combined\n")
@@ -257,6 +258,7 @@ class MergeTests(unittest.TestCase):
         self.git("push", "origin", "dev")
         before = self.git("rev-parse", "HEAD")
         client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
         client.repair_update.side_effect = RuntimeError("budget exhausted")
         with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
             with self.assertRaisesRegex(RuntimeError, "budget exhausted"):
@@ -274,6 +276,7 @@ class MergeTests(unittest.TestCase):
         self.git("tag", "-f", "v1.7.129")
         os.chdir(self.root / "fork")
         client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
         with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
             self.invoke()
             self.assertTrue(self.record_review.called)
@@ -292,6 +295,7 @@ class MergeTests(unittest.TestCase):
         self.commit("fork configuration and manual version")
         self.git("push", "origin", "dev")
         client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
         def repair(conflicts, overview=None):
             gradle.write_text('android { // combined\n    versionName "1.7.128"\n    versionCode 821\n}\n')
             return [str(gradle)]
@@ -326,6 +330,7 @@ class MergeTests(unittest.TestCase):
         self.git("tag", "-f", "v1.7.129", rewritten)
         os.chdir(self.root / "fork")
         client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
         with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
             self.invoke()
             self.assertIn("history diverged", self.record_review.call_args.args[4])
@@ -346,6 +351,7 @@ class MergeTests(unittest.TestCase):
         self.commit("fork test and prose")
         self.git("push", "origin", "dev")
         client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
         def repair(conflicts, overview=None):
             for path, _ in conflicts:
                 Path(path).write_text("combined prose\n" if path.endswith(".md") else "combined assertions\n")

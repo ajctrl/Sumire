@@ -11,6 +11,11 @@ class CustomKeyboardPreferenceFragment : AsyncPreferenceFragment() {
 
     override fun onPreferencesReady(savedInstanceState: Bundle?, rootKey: String?) {
 
+        findPreference<Preference>("custom_layout_size_position_preference")?.setOnPreferenceClickListener {
+            navigateSafely(R.id.keyboardGeometrySettingsFragment, Bundle().apply { putString("geometryKeyboard", "CUSTOM") })
+            true
+        }
+
         val customKeyboardSizePreference =
             findPreference<Preference>("custom_keyboard_size_preference")
 
@@ -28,6 +33,10 @@ class CustomKeyboardPreferenceFragment : AsyncPreferenceFragment() {
             }
         }
 
+        findPreference<Preference>("custom_qwerty_popup_style")?.setOnPreferenceClickListener {
+            navigateSafely(R.id.customQwertyPopupStyleSettingFragment)
+            true
+        }
         applyLegacySearchResultFilterIfNeeded()
     }
 }

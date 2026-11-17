@@ -27,12 +27,6 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
 
-enum class TfbiFlickDirection {
-    UP, DOWN, LEFT, RIGHT,
-    UP_RIGHT, DOWN_RIGHT, DOWN_LEFT, UP_LEFT,
-    TAP
-}
-
 @SuppressLint("ClickableViewAccessibility")
 class TfbiInputController(
     private val context: Context,
@@ -391,6 +385,12 @@ class TfbiInputController(
         baseDirection: TfbiFlickDirection,
         showPetals: Boolean
     ) {
+        val config = currentGestureConfig()
+        if (showPetals && !config.showLongPressPopup) {
+            guidePopupHost.dismiss()
+            return
+        }
+        if (!showPetals && !config.showFlickPopup) return
         if (popupPresentationMode == TfbiPopupPresentationMode.GUIDE_ABOVE_KEY) {
             showGuidePopup(anchorView, baseDirection, showPetals)
         } else {

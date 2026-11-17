@@ -134,6 +134,14 @@ class KeyboardEditorViewModel @Inject constructor(
             KeyboardDefaultLayouts.createQwertyTemplateLayout()
         ),
         LayoutTemplate(
+            R.string.template_qwerty_number,
+            KeyboardDefaultLayouts.createQwertyNumberTemplateLayout()
+        ),
+        LayoutTemplate(
+            R.string.template_qwerty_symbol,
+            KeyboardDefaultLayouts.createQwertySymbolTemplateLayout()
+        ),
+        LayoutTemplate(
             R.string.template_empty_5x4_flexible,
             KeyboardDefaultLayouts.createEmpty5x4FlexibleTemplateLayout()
         ),
@@ -784,7 +792,6 @@ class KeyboardEditorViewModel @Inject constructor(
             twoStepFlickKeyMaps = twoStepFlickKeyMaps.filterKeys { it !in removedKeyIds },
             longPressFlickKeyMaps = longPressFlickKeyMaps.filterKeys { it !in removedKeyIds },
             twoStepLongPressKeyMaps = twoStepLongPressKeyMaps.filterKeys { it !in removedKeyIds },
-            hierarchicalFlickMaps = hierarchicalFlickMaps.filterKeys { it !in removedKeyIds }
         )
     }
 
@@ -1181,7 +1188,14 @@ class KeyboardEditorViewModel @Inject constructor(
         finalTwoStepLongPressMaps: MutableMap<String, Map<TfbiFlickDirection, Map<TfbiFlickDirection, String>>>
     ) {
         when (newKeyData.keyType) {
-            KeyType.TWO_STEP_FLICK,
+            KeyType.FREE_FLICK -> {
+                finalFlickMaps.remove(keyId)
+                finalCircularFlickMaps.remove(keyId)
+                finalLongPressFlickMaps.remove(keyId)
+                finalTwoStepMaps.remove(keyId)
+                finalTwoStepLongPressMaps.remove(keyId)
+            }
+
             KeyType.FLICK_LONG_PRESS -> {
                 finalFlickMaps.remove(keyId)
                 finalCircularFlickMaps.remove(keyId)

@@ -598,12 +598,12 @@
     {
       "group": "androidx.drawerlayout",
       "name": "drawerlayout",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "configurations": [
         "liteStandardDebugRuntimeClasspath",
         "fullStandardDebugRuntimeClasspath"
       ],
-      "pomUrl": "https://dl.google.com/dl/android/maven2/androidx/drawerlayout/drawerlayout/1.1.1/drawerlayout-1.1.1.pom",
+      "pomUrl": "https://dl.google.com/dl/android/maven2/androidx/drawerlayout/drawerlayout/1.2.0/drawerlayout-1.2.0.pom",
       "licenses": [
         {
           "name": "The Apache Software License, Version 2.0",
@@ -612,8 +612,8 @@
       ],
       "evidence": [
         {
-          "url": "https://dl.google.com/dl/android/maven2/androidx/drawerlayout/drawerlayout/1.1.1/drawerlayout-1.1.1.pom",
-          "sha256": "c12fa903ba53005962a72405f37896608718f41673fc4a62312e4536132f6f45"
+          "url": "https://dl.google.com/dl/android/maven2/androidx/drawerlayout/drawerlayout/1.2.0/drawerlayout-1.2.0.pom",
+          "sha256": "77811b3a60b1891b8edac4c4f970b11247e259a5c4a399fecad953a3df408fc1"
         }
       ]
     },
@@ -3074,6 +3074,81 @@
         {
           "url": "https://repo.maven.apache.org/maven2/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.pom",
           "sha256": "cdab929a3b95211f43d2090c5e2d0dfe8465960e378bc32b35841dab324433a6"
+        }
+      ]
+    },
+    {
+      "group": "com.google.ai.edge.litertlm",
+      "name": "litertlm-android",
+      "version": "0.19.0",
+      "configurations": [
+        "fullStandardDebugRuntimeClasspath"
+      ],
+      "pomUrl": "https://dl.google.com/dl/android/maven2/com/google/ai/edge/litertlm/litertlm-android/0.19.0/litertlm-android-0.19.0.pom",
+      "licenses": [
+        {
+          "name": "The Apache Software License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "evidence": [
+        {
+          "url": "https://dl.google.com/dl/android/maven2/com/google/ai/edge/litertlm/litertlm-android/0.19.0/litertlm-android-0.19.0.pom",
+          "sha256": "9f4e78a67f31a7f94c9527b623f21a7810fac286270e09b2fb78acfab35a5b06"
+        }
+      ]
+    },
+    {
+      "group": "com.google.ai.edge.litert",
+      "name": "litert-npu-runtime-google-tensor",
+      "version": "2.3.2",
+      "configurations": [
+        "fullStandardReleaseRuntimeClasspath"
+      ],
+      "pomUrl": "https://dl.google.com/dl/android/maven2/com/google/ai/edge/litert/litert-npu-runtime-google-tensor/2.3.2/litert-npu-runtime-google-tensor-2.3.2.pom",
+      "licenses": [
+        {
+          "name": "The Apache Software License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "evidence": [
+        {
+          "url": "https://dl.google.com/dl/android/maven2/com/google/ai/edge/litert/litert-npu-runtime-google-tensor/2.3.2/litert-npu-runtime-google-tensor-2.3.2.pom",
+          "sha256": "63c37501388202aea61fe5f471542c61634ba90a2c101c40290b65339e6cc8e8"
+        }
+      ]
+    },
+    {
+      "group": "org.tukaani",
+      "name": "xz",
+      "version": "1.12",
+      "configurations": [
+        "fullStandardReleaseRuntimeClasspath",
+        "liteStandardReleaseRuntimeClasspath",
+        "liteFdroidReleaseRuntimeClasspath"
+      ],
+      "pomUrl": "https://repo.maven.apache.org/maven2/org/tukaani/xz/1.12/xz-1.12.pom",
+      "licenses": [
+        {
+          "name": "0BSD"
+        }
+      ],
+      "evidence": [
+        {
+          "url": "https://repo.maven.apache.org/maven2/org/tukaani/xz/1.12/xz-1.12.pom",
+          "sha256": "937b44d869c059c39f07ae194d8cd6219f5aebf2200ef9707f0b50b7837da281"
+        },
+        {
+          "url": "https://raw.githubusercontent.com/tukaani-project/xz-java/v1.12/COPYING",
+          "sha256": "1e77ef26cee5216d6531e49cbf2f6111a0270dc7b322fc65477063c5aff88766"
+        }
+      ],
+      "sourceNotices": [
+        {
+          "title": "XZ for Java 1.12 COPYING (0BSD)",
+          "asset": "software-licenses/xz-1.12-0bsd.txt",
+          "sha256": "1e77ef26cee5216d6531e49cbf2f6111a0270dc7b322fc65477063c5aff88766"
         }
       ]
     }

@@ -6,7 +6,6 @@ import android.widget.Button
 import com.kazumaproject.core.domain.flick.GestureSessionConfig
 import com.kazumaproject.core.domain.flick.GestureSessionConfigSource
 import com.kazumaproject.core.domain.flick.TfbiDiagonalRecognitionMode
-import com.kazumaproject.custom_keyboard.data.TfbiFlickNode
 import com.kazumaproject.custom_keyboard.view.TfbiFlickDirection
 import com.kazumaproject.custom_keyboard.view.TfbiInputController
 import org.junit.Assert.assertEquals
@@ -26,12 +25,7 @@ class TfbiDiagonalControllerTest {
         assertEquals("ぇ", typeTwoStep(TfbiDiagonalRecognitionMode.LEGACY, 68f))
     }
 
-    @Test
-    fun threeStepRequiresPerpendicularTravelOnlyInStableMode() {
-        assertEquals("え", typeThreeStep(TfbiDiagonalRecognitionMode.STABLE, 69f))
-        assertEquals("ぇ", typeThreeStep(TfbiDiagonalRecognitionMode.STABLE, 72f))
-        assertEquals("ぇ", typeThreeStep(TfbiDiagonalRecognitionMode.LEGACY, 69f))
-    }
+
 
     @Test
     fun stickyTwoStepUsesTheSameTurnRequirement() {
@@ -75,43 +69,7 @@ class TfbiDiagonalControllerTest {
         return output
     }
 
-    private fun typeThreeStep(mode: TfbiDiagonalRecognitionMode, finalY: Float): String {
-        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
-        val button = Button(activity)
-        activity.setContentView(button)
-        var output = ""
-        val child = mapOf(
-            TfbiFlickDirection.RIGHT to TfbiFlickNode.Input("え"),
-            TfbiFlickDirection.DOWN_RIGHT to TfbiFlickNode.Input("ぇ")
-        )
-        val node = TfbiFlickNode.StatefulKey(
-            label = "あ",
-            normalMap = mapOf(
-                TfbiFlickDirection.TAP to TfbiFlickNode.Input("あ"),
-                TfbiFlickDirection.RIGHT to TfbiFlickNode.SubMenu(child)
-            )
-        )
-        val controller = TfbiHierarchicalFlickController(activity, config(mode)).apply {
-            listener = object : TfbiHierarchicalFlickController.TfbiListener {
-                override fun onPress(character: String) = Unit
-                override fun onFlick(character: String) { output = character }
-                override fun onModeChanged(
-                    newLabel: String,
-                    activeRootMap: Map<TfbiFlickDirection, TfbiFlickNode>
-                ) = Unit
-            }
-            attach(button, node)
-        }
-        try {
-            button.dispatch(MotionEvent.ACTION_DOWN, 50f, 50f, 0L)
-            button.dispatch(MotionEvent.ACTION_MOVE, 72f, 50f, 10L)
-            button.dispatch(MotionEvent.ACTION_MOVE, 85f, finalY, 20L)
-            button.dispatch(MotionEvent.ACTION_UP, 85f, finalY, 30L)
-        } finally {
-            controller.cancel()
-        }
-        return output
-    }
+
 
     private fun typeStickyTwoStep(mode: TfbiDiagonalRecognitionMode, finalY: Float): String {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()

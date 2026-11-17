@@ -1,5 +1,6 @@
 package com.kazumaproject.custom_keyboard.view
 
+import com.kazumaproject.custom_keyboard.data.KeyboardLayoutOrigin
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
@@ -33,6 +34,10 @@ import androidx.core.graphics.ColorUtils
 import com.google.android.material.R
 import com.kazumaproject.core.domain.skin.KeyboardSkinId
 import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
+import com.kazumaproject.core.ui.geometry.KeyboardGeometry
+import com.kazumaproject.core.ui.geometry.KeyboardGeometryGroup
+import com.kazumaproject.core.ui.geometry.KeyboardGeometryItem
+import com.kazumaproject.core.ui.geometry.KeyboardViewGeometry
 import com.kazumaproject.core.ui.font.KeyboardFontAware
 import com.kazumaproject.core.ui.font.KeyboardFontApplicator
 import com.kazumaproject.core.ui.font.KeyboardFontGlyphDrawable
@@ -61,8 +66,11 @@ import com.kazumaproject.custom_keyboard.controller.DoubleTapActionDispatcher
 import com.kazumaproject.custom_keyboard.controller.FlickLongPressInputController
 import com.kazumaproject.custom_keyboard.controller.StandardFlickInputController
 import com.kazumaproject.custom_keyboard.controller.TapTaskScheduler
+import com.kazumaproject.custom_keyboard.controller.QwertyKeyInputController
+import com.kazumaproject.custom_keyboard.data.QwertyKeyConfig
+import com.kazumaproject.custom_keyboard.data.QwertyKeyLayer
+import com.kazumaproject.core.data.popup.QwertyPopupViewStyleSet
 import com.kazumaproject.custom_keyboard.controller.TapLongPressInputController
-import com.kazumaproject.custom_keyboard.controller.TfbiHierarchicalFlickController
 import com.kazumaproject.custom_keyboard.controller.TfbiStickyFlickController
 import com.kazumaproject.custom_keyboard.data.CircularFlickDirection
 import com.kazumaproject.custom_keyboard.data.FlickAction
@@ -83,7 +91,6 @@ import com.kazumaproject.custom_keyboard.data.PETAL_TOGGLE_DIRECTIONS
 import com.kazumaproject.custom_keyboard.data.ResolvedSumireSpecialKeyAction
 import com.kazumaproject.custom_keyboard.data.SpacerItem
 import com.kazumaproject.custom_keyboard.data.SumireSpecialKeyDirection
-import com.kazumaproject.custom_keyboard.data.TfbiFlickNode
 import com.kazumaproject.custom_keyboard.data.applyTapOverrideDisplayForDynamicSumireSpecialKey
 import com.kazumaproject.custom_keyboard.data.buildSumireSpecialKeyDisplayActionMap
 import com.kazumaproject.custom_keyboard.data.buildEvenCircularRanges
@@ -127,6 +134,7 @@ class FlickKeyboardView @JvmOverloads constructor(
 
     interface OnKeyboardActionListener {
         fun onPress(action: KeyAction)
+        fun onResolvedText(text: String) { onAction(KeyAction.Text(text), false) }
         fun onAction(action: KeyAction, isFlick: Boolean)
         fun onActionLongPress(action: KeyAction)
         fun onActionUpAfterLongPress(action: KeyAction)
@@ -153,14 +161,42 @@ class FlickKeyboardView @JvmOverloads constructor(
     private val independentTextPreviews = linkedMapOf<KeyData, FlickTextSelection>()
     private val independentLastCoordinates = mutableMapOf<Int, Pair<Float, Float>>()
 
+    private var builtInPopupMapOptions = com.kazumaproject.custom_keyboard.data.PopupMapInputOptions()
+    private var customPopupMapOptions = com.kazumaproject.custom_keyboard.data.PopupMapInputOptions()
+    private val popupMapOptions get() = if (layoutOrigin == KeyboardLayoutOrigin.BUILT_IN)
+        builtInPopupMapOptions else customPopupMapOptions
+
+    @JvmOverloads
+    fun setPopupMapOptions(
+        value: com.kazumaproject.custom_keyboard.data.PopupMapInputOptions,
+        origin: KeyboardLayoutOrigin? = null,
+    ) {
+        if (origin == null || origin == KeyboardLayoutOrigin.BUILT_IN) builtInPopupMapOptions = value
+        if (origin == null || origin == KeyboardLayoutOrigin.CUSTOM) customPopupMapOptions = value
+        if (origin == null || origin == layoutOrigin) popupMapControllers.forEach { it.setOptions(popupMapOptions) }
+    }
+    private val popupMapControllers = mutableListOf<com.kazumaproject.custom_keyboard.controller.PopupMapInputController>()
     private val flickControllers = mutableListOf<CustomAngleFlickController>()
     private val crossFlickControllers = mutableListOf<CrossFlickInputController>()
     private val centerGuideFlickControllers = mutableListOf<CenterGuideFlickInputController>()
     private val standardFlickControllers = mutableListOf<StandardFlickInputController>()
     private val tfbiControllers = mutableListOf<TfbiInputController>()
     private val flickLongPressControllers = mutableListOf<FlickLongPressInputController>()
+    private val qwertyControllers = mutableListOf<QwertyKeyInputController>()
+    private var showQwertyPreview = true
+    private var qwertyPopupStyle = QwertyPopupViewStyleSet(PopupViewStyle(100, 28f), PopupViewStyle(100, 28f))
+
+    fun setQwertyPopupSettings(showPreview: Boolean, style: QwertyPopupViewStyleSet) {
+        val normalized = QwertyPopupViewStyleSet(clampPopupStyle(style.keyPreview), clampPopupStyle(style.variation))
+        if (showQwertyPreview == showPreview && qwertyPopupStyle == normalized) return
+        cancelTrackedTouchState()
+        cancelInputControllers()
+        showQwertyPreview = showPreview
+        qwertyPopupStyle = normalized
+        restoreInputControllersIfNeeded()
+    }
+
     private val stickyTfbiControllers = mutableListOf<TfbiStickyFlickController>()
-    private val hierarchicalTfbiControllers = mutableListOf<TfbiHierarchicalFlickController>()
     private val tapLongPressControllers = mutableListOf<TapLongPressInputController>()
     private val doubleTapActionDispatcher = DoubleTapActionDispatcher(
         timeoutMillis = ViewConfiguration.getDoubleTapTimeout().toLong(),
@@ -174,6 +210,8 @@ class FlickKeyboardView @JvmOverloads constructor(
         dispatch = { action -> listener?.onAction(action, false) }
     )
 
+    private var showFlickPopup = true
+    private var showLongPressPopup = true
     private var popupWindowAnchorProvider: (() -> View?)? = null
     private var tfbiPopupPresentationMode = TfbiPopupPresentationMode.LEGACY_GRID
     private var tfbiFlickStartPositionMode = TfbiFlickStartPositionMode.TOUCH_POINT
@@ -197,7 +235,9 @@ class FlickKeyboardView @JvmOverloads constructor(
             flickThresholdPx = resolvedFlickThresholdPx(settings.flickSensitivity),
             longPressTimeoutMillis = settings.longPressTimeoutMillis,
             flickThresholdShape = settings.flickThresholdShape,
-            tfbiDiagonalRecognitionMode = settings.tfbiDiagonalRecognitionMode
+            tfbiDiagonalRecognitionMode = settings.tfbiDiagonalRecognitionMode,
+            showFlickPopup = showFlickPopup,
+            showLongPressPopup = showLongPressPopup
         )
     }
     private var defaultTextSize = 14f
@@ -225,6 +265,56 @@ class FlickKeyboardView @JvmOverloads constructor(
     private val canonicalGuideLabels =
         IdentityHashMap<AutoSizeButton, AutoSizeButton.FlickGuideLabels>()
     private var currentLayout: KeyboardLayout? = null
+    private var layoutOrigin = KeyboardLayoutOrigin.CUSTOM
+
+    private fun isUnsupported(key: KeyData): Boolean =
+        key.keyType == null
+
+    // Used only for the built-in Sumire layout. User-defined layouts keep the legacy path.
+    private var geometry = KeyboardGeometry()
+    private var geometryBaseHeight = 0
+    private var geometryHeightListener: ((Int) -> Unit)? = null
+    private var lastRequiredGeometryHeight = 0
+
+    fun setSumireGeometry(value: KeyboardGeometry, baseHeightPx: Int = 0, onRequiredHeight: ((Int) -> Unit)? = null) {
+        val next = value.copy(splitPercent = 0).normalized()
+        if ((geometry.isDefault && next.isDefault) || (geometry == next && geometryBaseHeight == baseHeightPx)) {
+            geometry = next
+            geometryBaseHeight = baseHeightPx
+            geometryHeightListener = onRequiredHeight
+            return
+        }
+        cancelTrackedTouchState()
+        if (next.isDefault && !geometry.isDefault) {
+            KeyboardViewGeometry.reset(keyInfos.map { KeyboardGeometryItem(it.view, KeyboardGeometryGroup.SINGLE) })
+        }
+        geometry = next
+        geometryBaseHeight = baseHeightPx
+        geometryHeightListener = onRequiredHeight
+        lastRequiredGeometryHeight = 0
+        requestLayout()
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val requested = MeasureSpec.getSize(heightMeasureSpec)
+        if (!geometry.isDefault && geometryBaseHeight > 0 && requested > geometryBaseHeight) {
+            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(geometryBaseHeight, MeasureSpec.EXACTLY))
+            setMeasuredDimension(measuredWidth, requested)
+        } else super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val base = if (!geometry.isDefault && geometryBaseHeight > 0 && height > geometryBaseHeight) geometryBaseHeight else height
+        super.onLayout(changed, left, top, right, top + base)
+        if (geometry.isDefault) return
+        val items = keyInfos.map { KeyboardGeometryItem(it.view, KeyboardGeometryGroup.SINGLE) }
+        val result = KeyboardViewGeometry.apply(this, items, geometry, qwerty = false, baselineHeight = base.toFloat())
+        val required = kotlin.math.ceil(result.requiredHeightPx.toDouble()).toInt().coerceAtLeast(base)
+        if (required != lastRequiredGeometryHeight) {
+            lastRequiredGeometryHeight = required
+            post { geometryHeightListener?.invoke(required) }
+        }
+    }
     private var keyHitTestMode = KeyHitTestMode.KEY_BOUNDS
     val activeKeyHitTestMode: KeyHitTestMode
         get() = keyHitTestMode
@@ -232,6 +322,8 @@ class FlickKeyboardView @JvmOverloads constructor(
     private var keyboardRenderRevision: Int = 0
     private var renderedKeyboardRenderRevision: Int = -1
     private var keyCharacterCase: KeyCharacterCase = KeyCharacterCase.AS_DEFINED
+    private var ctrlLocked = false
+    private var altLocked = false
     private var sumireSpecialKeyActionResolver:
             ((String, String, KeyData, SumireSpecialKeyDirection) -> ResolvedSumireSpecialKeyAction)? =
         null
@@ -260,7 +352,6 @@ class FlickKeyboardView @JvmOverloads constructor(
     private var customAngleAndRange: Map<CircularFlickDirection, Pair<Float, Float>> = emptyMap()
     private var circularViewScale: Float = 1.0f
     private var circularFlickDirectionCount: Int = 4
-    private var hierarchicalFlickModeSwitchAngleMargin: Double = 20.0
     private var visibleKeyLabels: Set<String>? = null
     private var borderWidth: Int = 1
     private var flickGuideEnabled: Boolean = false
@@ -324,6 +415,11 @@ class FlickKeyboardView @JvmOverloads constructor(
         sumireSpecialKeyInputMode = null
     }
 
+    fun setKeyPopupVisibility(showFlickPopup: Boolean, showLongPressPopup: Boolean) {
+        this.showFlickPopup = showFlickPopup
+        this.showLongPressPopup = showLongPressPopup
+    }
+
     fun setPopupWindowAnchorProvider(provider: (() -> View?)?) {
         popupWindowAnchorProvider = provider
         flickControllers.forEach { it.setPopupWindowAnchorProvider(provider) }
@@ -333,21 +429,18 @@ class FlickKeyboardView @JvmOverloads constructor(
         tfbiControllers.forEach { it.setPopupWindowAnchorProvider(provider) }
         flickLongPressControllers.forEach { it.setPopupWindowAnchorProvider(provider) }
         stickyTfbiControllers.forEach { it.setPopupWindowAnchorProvider(provider) }
-        hierarchicalTfbiControllers.forEach { it.setPopupWindowAnchorProvider(provider) }
     }
 
     fun setTfbiPopupPresentationMode(mode: TfbiPopupPresentationMode) {
         tfbiPopupPresentationMode = mode
         tfbiControllers.forEach { it.setPopupPresentationMode(mode) }
         stickyTfbiControllers.forEach { it.setPopupPresentationMode(mode) }
-        hierarchicalTfbiControllers.forEach { it.setPopupPresentationMode(mode) }
     }
 
     fun setTfbiFlickStartPositionMode(mode: TfbiFlickStartPositionMode) {
         tfbiFlickStartPositionMode = mode
         tfbiControllers.forEach { it.setTfbiFlickStartPositionMode(mode) }
         stickyTfbiControllers.forEach { it.setTfbiFlickStartPositionMode(mode) }
-        hierarchicalTfbiControllers.forEach { it.setTfbiFlickStartPositionMode(mode) }
     }
 
     fun applyPopupViewStyleSet(styleSet: FlickPopupViewStyleSet) {
@@ -374,7 +467,7 @@ class FlickKeyboardView @JvmOverloads constructor(
         tfbiControllers.forEach { it.applyPopupViewStyle(popupViewStyleSet.tfbi) }
         flickLongPressControllers.forEach { it.applyPopupViewStyle(popupViewStyleSet.tfbi) }
         stickyTfbiControllers.forEach { it.applyPopupViewStyle(popupViewStyleSet.tfbi) }
-        hierarchicalTfbiControllers.forEach { it.applyPopupViewStyle(popupViewStyleSet.tfbi) }
+        popupMapControllers.forEach(::applyFreeFlickPopupStyle)
         restoreInputControllersIfNeeded()
     }
 
@@ -529,12 +622,6 @@ class FlickKeyboardView @JvmOverloads constructor(
         circularFlickDirectionCount = directionCount.coerceIn(4, 7)
     }
 
-    fun setHierarchicalFlickModeSwitchAngleMargin(margin: Double) {
-        hierarchicalFlickModeSwitchAngleMargin = margin.coerceIn(0.0, 34.0)
-        hierarchicalTfbiControllers.forEach {
-            it.setModeSwitchAngleMargin(hierarchicalFlickModeSwitchAngleMargin)
-        }
-    }
 
     fun setVisibleKeyLabels(labels: Set<String>?) {
         visibleKeyLabels = labels
@@ -593,9 +680,20 @@ class FlickKeyboardView @JvmOverloads constructor(
             keyboardRenderRevision += 1
         }
 
+        popupMapControllers.forEach(::applyFreeFlickPopupStyle)
         if (liquidGlassEnable) {
             this.setBackgroundColor(ColorUtils.setAlphaComponent(customBgColor, 0))
         }
+    }
+
+    private fun applyFreeFlickPopupStyle(controller: com.kazumaproject.custom_keyboard.controller.PopupMapInputController) {
+        val style = popupViewStyleSet.tfbi
+        controller.applyPopupViewStyle(
+            style.copy(skinId = keyboardSkinId,
+                backgroundColor = style.backgroundColor ?: customKeyColor.takeIf { themeMode == "custom" },
+                textColor = style.textColor ?: customKeyTextColor.takeIf { themeMode == "custom" }),
+            customSpecialKeyColor.takeIf { themeMode == "custom" },
+            customBorderColor.takeIf { themeMode == "custom" && customBorderEnable })
     }
 
     private fun manipulateColor(color: Int, factor: Float): Int {
@@ -661,7 +759,18 @@ class FlickKeyboardView @JvmOverloads constructor(
     /** Nearest-key input is opt-in; omitting the mode restores legacy bounds-only behavior. */
     @JvmOverloads
     @SuppressLint("ClickableViewAccessibility")
-    fun setKeyboard(layout: KeyboardLayout, hitTestMode: KeyHitTestMode = KeyHitTestMode.KEY_BOUNDS) {
+    fun setKeyboard(
+        layout: KeyboardLayout,
+        hitTestMode: KeyHitTestMode = KeyHitTestMode.KEY_BOUNDS,
+        origin: KeyboardLayoutOrigin = KeyboardLayoutOrigin.CUSTOM
+    ) {
+        if (layoutOrigin != origin) {
+            cancelTrackedTouchState()
+            doubleTapActionDispatcher.cancel()
+            layoutOrigin = origin
+            popupMapControllers.forEach { it.setOptions(popupMapOptions) }
+            keyboardRenderRevision += 1
+        }
         setKeyHitTestMode(hitTestMode)
         setKeyboard(layout, forceRebuild = false)
     }
@@ -739,6 +848,7 @@ class FlickKeyboardView @JvmOverloads constructor(
                 )
             }
         }
+        keyInfos.forEach(::refreshModifierKeyPresentation)
         renderedKeyboardRenderRevision = keyboardRenderRevision
         controllerRebindPending = false
     }
@@ -761,6 +871,20 @@ class FlickKeyboardView @JvmOverloads constructor(
     }
 
     private fun applyVisibleKeyFilter(keyView: View, keyData: KeyData) {
+        if(keySelection!=null) {
+            keyView.visibility=View.VISIBLE
+            keyView.isEnabled=keyData.label in selectableLabels
+            keyView.alpha=if(keyView.isEnabled) 1f else .4f
+            return
+        }
+        if (isUnsupported(keyData)) {
+            keyView.visibility = if (visibleKeyLabels?.contains(keyData.label) != false) View.VISIBLE else View.INVISIBLE
+            keyView.isEnabled = false
+            keyView.alpha = 0.4f
+            keyView.contentDescription = "${keyData.label}: ${context.getString(com.kazumaproject.core.R.string.custom_key_unsupported)}"
+            return
+        }
+        keyView.alpha = 1f
         val labels = visibleKeyLabels ?: run {
             keyView.visibility = View.VISIBLE
             keyView.isEnabled = true
@@ -827,6 +951,79 @@ class FlickKeyboardView @JvmOverloads constructor(
         info.view = newView
         info.keyData = newKeyData
         info.controller = newController
+        refreshModifierKeyPresentation(info)
+    }
+
+    /** Keep modifier state in the IME; the view only renders it and suppresses text previews. */
+    fun setSoftwareModifierState(ctrl: Boolean, alt: Boolean) {
+        if (ctrlLocked != ctrl || altLocked != alt) cancelTextPreview()
+        ctrlLocked = ctrl
+        altLocked = alt
+        keyInfos.forEach(::refreshModifierKeyPresentation)
+    }
+
+    private fun modifierFlickPresentation(flick: FlickAction): FlickAction {
+        if (flick !is FlickAction.Action) return flick
+        val resource = when (flick.action) {
+            KeyAction.CtrlLock -> if (ctrlLocked) com.kazumaproject.core.R.drawable.custom_key_ctrl_locked
+                else com.kazumaproject.core.R.drawable.custom_key_ctrl
+            KeyAction.AltLock -> if (altLocked) com.kazumaproject.core.R.drawable.custom_key_alt_locked
+                else com.kazumaproject.core.R.drawable.custom_key_alt
+            else -> return flick
+        }
+        return flick.copy(drawableResId = resource)
+    }
+
+    private fun refreshModifierKeyPresentation(info: KeyInfo) {
+        val locked = when (info.keyData.action) {
+            KeyAction.CtrlLock -> ctrlLocked
+            KeyAction.AltLock -> altLocked
+            else -> return
+        }
+        val button = info.view as? AppCompatImageButton ?: return
+        if (KeyIconResolver.hasIconOverride(info.keyData)) {
+            KeyIconResolver.setImage(button, info.keyData)
+            if (locked) {
+                val base = button.drawable
+                val badge = androidx.appcompat.content.res.AppCompatResources.getDrawable(
+                    context, com.kazumaproject.core.R.drawable.custom_key_modifier_badge
+                )?.mutate()
+                if (base != null && badge != null) {
+                    badge.setTint(resolveKeyVisualPalette(info.keyData).textColor)
+                    button.setImageDrawable(android.graphics.drawable.LayerDrawable(arrayOf(base, badge)))
+                }
+            }
+        } else {
+            val icon = when (info.keyData.action) {
+                KeyAction.CtrlLock -> if (locked) com.kazumaproject.core.R.drawable.custom_key_ctrl_locked
+                    else com.kazumaproject.core.R.drawable.custom_key_ctrl
+                else -> if (locked) com.kazumaproject.core.R.drawable.custom_key_alt_locked
+                    else com.kazumaproject.core.R.drawable.custom_key_alt
+            }
+            KeyboardFontGlyphDrawable.setImageResource(button, icon, keyboardFontSnapshot)
+        }
+        applyImageButtonTint(button, info.keyData)
+        button.contentDescription = if (locked) context.getString(
+            com.kazumaproject.custom_keyboard.R.string.modifier_locked, info.keyData.label
+        ) else info.keyData.label
+        updateImageButtonMatrix(button, info.keyData)
+    }
+
+    /** Includes tap, flick, circular, double-tap, and active Sumire overrides. */
+    fun hasConfiguredAction(action: KeyAction): Boolean {
+        val layout = currentLayout ?: return false
+        if (layout.keys.any { key ->
+                key.action == action || key.doubleTapBinding?.action == action ||
+                    key.dynamicStates.orEmpty().any { it.action == action } ||
+                    (key.isSpecialKey && SumireSpecialKeyDirection.entries.any { direction ->
+                        (resolveSumireSpecialKeyOverride(key, direction) as? ResolvedSumireSpecialKeyAction.Action)?.action == action
+                    })
+            }) return true
+        return layout.flickKeyMaps.values.flatten().any { map ->
+            map.values.any { (it as? FlickAction.Action)?.action == action }
+        } || layout.circularFlickKeyMaps.values.flatten().any { map ->
+            map.values.any { (it as? FlickAction.Action)?.action == action }
+        }
     }
 
     fun updateKeyIconByAction(action: KeyAction, @DrawableRes drawableResId: Int) {
@@ -847,6 +1044,7 @@ class FlickKeyboardView @JvmOverloads constructor(
         val button = info.view as? AutoSizeButton ?: return
         val guideLabels = canonicalGuideLabels[button]
         updateKeyVisuals(button, info.keyData)
+        applyVisibleKeyFilter(button, info.keyData)
         if (guideLabels != null) {
             applyDisplayedGuideLabels(button, info.keyData, guideLabels)
         }
@@ -861,7 +1059,6 @@ class FlickKeyboardView @JvmOverloads constructor(
         tfbiControllers.forEach { it.setInputTextTransform(transform) }
         flickLongPressControllers.forEach { it.setInputTextTransform(transform) }
         stickyTfbiControllers.forEach { it.setInputTextTransform(transform) }
-        hierarchicalTfbiControllers.forEach { it.setInputTextTransform(transform) }
     }
 
     private fun transformInputTextForDisplay(text: String): String =
@@ -889,6 +1086,9 @@ class FlickKeyboardView @JvmOverloads constructor(
         KeyIconResolver.hasIcon(keyData) && modeSwitchLabelForDisplay(keyData) == null
 
     private fun keyLabelForDisplay(keyData: KeyData): String {
+        if (keyData.keyType == KeyType.QWERTY) {
+            return keyData.qwertyConfig?.layer(keyCharacterCase)?.displayLabel ?: keyData.label
+        }
         modeSwitchLabelForDisplay(keyData)?.let { return it }
         val canonicalLabel = KeyIconResolver.resolvedLabelForRendering(keyData)
         return if (shouldTransformMainLabel(keyData)) {
@@ -1276,20 +1476,7 @@ class FlickKeyboardView @JvmOverloads constructor(
         )
     }
 
-    private fun applyHierarchicalGuideLabels(
-        button: AutoSizeButton,
-        keyData: KeyData,
-        rootMap: Map<TfbiFlickDirection, TfbiFlickNode>
-    ) {
-        applyResolvedGuideLabels(
-            button,
-            keyData,
-            FlickGuideLabelMapper.buildHierarchicalGuideLabels(
-                rootMap,
-                flickGuideMaxCodePoints
-            )
-        )
-    }
+
 
     private fun applyResolvedGuideLabels(
         button: AutoSizeButton,
@@ -1363,7 +1550,7 @@ class FlickKeyboardView @JvmOverloads constructor(
         val commonCornerRadius = dpToPx(8).toFloat()
         val visualPalette = resolveKeyVisualPalette(keyData)
 
-        val keyView: View = if (shouldRenderKeyAsImage(keyData)) {
+        val keyView: View = if (shouldRenderKeyAsImage(keyData) && !isUnsupported(keyData)) {
             AppCompatImageButton(context).apply {
                 isFocusable = false
                 elevation = 0f
@@ -1546,10 +1733,87 @@ class FlickKeyboardView @JvmOverloads constructor(
     }
 
     @SuppressLint("ClickableViewAccessibility")
+    private var keySelection: ((String) -> Unit)? = null
+    private var selectableLabels: Set<String> = emptySet()
+    private var selectedLabel: String? = null
+    private var selectionTarget: View? = null
+
+    /** An editor surface: keys can be selected but no input controller is attached. */
+    fun setKeySelectionMode(labels: Set<String>, onSelect: (String) -> Unit) {
+        cancelTrackedTouchState()
+        cancelInputControllers()
+        selectableLabels = labels; keySelection = onSelect
+        keyInfos.forEach { attachKeyBehavior(it.view,it.keyData); applyVisibleKeyFilter(it.view,it.keyData) }
+    }
+    fun selectPreviewKey(label: String) {
+        selectedLabel = label
+        keyInfos.forEach { info ->
+            info.view.isSelected = info.keyData.label == label
+            info.view.isPressed = info.view.isSelected
+        }
+    }
+    private fun handleSelectionTouch(event: MotionEvent): Boolean {
+        when(event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> selectionTarget=findTargetView(event.rawX,event.rawY)?.view
+            MotionEvent.ACTION_UP -> {
+                val target=selectionTarget
+                selectionTarget=null
+                if(target!=null && findTargetView(event.rawX,event.rawY)?.view===target) target.performClick()
+                selectedLabel?.let(::selectPreviewKey)
+            }
+            MotionEvent.ACTION_CANCEL -> {selectionTarget=null;selectedLabel?.let(::selectPreviewKey)}
+        }
+        return true
+    }
+
     private fun attachKeyBehavior(keyView: View, keyData: KeyData): Any? {
+        keySelection?.let { select ->
+            keyView.setOnTouchListener(null)
+            keyView.setOnClickListener { if(keyData.label in selectableLabels) select(keyData.label) }
+            keyView.isSelected=keyData.label==selectedLabel
+            keyView.isPressed=keyView.isSelected
+            return null
+        }
+        if (isUnsupported(keyData)) return null
         val layout = currentLayout ?: return null
 
+        keyData.popupMapConfig?.let { config ->
+            return com.kazumaproject.custom_keyboard.controller.PopupMapInputController(
+                config = config,
+                windowAnchor = { popupWindowAnchorProvider?.invoke() },
+                transform = ::transformInputTextForDisplay,
+                onPress = { notifyTextPress(keyData, it) },
+                onSelection = { text, flick -> updateTextPreview(keyData, text, flick) },
+                onCommit = { text, flick -> dispatchCommittedKeyAction(keyData, KeyAction.Text(text), flick) },
+                onCancel = { cancelTextPreview(keyData) },
+                options = popupMapOptions,
+                gestureConfigSource = gestureSessionConfigSource
+            ).also { applyFreeFlickPopupStyle(it); it.attach(keyView); popupMapControllers.add(it) }
+        }
         when (keyData.keyType) {
+            KeyType.QWERTY -> {
+                val config = keyData.qwertyConfig ?: QwertyKeyConfig(QwertyKeyLayer(
+                    output = (keyData.action as? KeyAction.Text)?.text ?: keyData.label,
+                    label = keyData.label
+                ))
+                return QwertyKeyInputController(
+                    gestureSessionConfigSource,
+                    layerProvider = { config.layer(keyCharacterCase) },
+                    styleProvider = { qwertyPopupStyle },
+                    fontProvider = { keyboardFontSnapshot },
+                    showPreview = { showQwertyPreview },
+                    windowAnchorProvider = { popupWindowAnchorProvider?.invoke() },
+                    onPress = {
+                        cancelTextPreview()
+                        listener?.onPress(KeyAction.Text(it))
+                    },
+                    onCommit = {
+                        cancelTextPreview()
+                        doubleTapActionDispatcher.interrupt()
+                        listener?.onResolvedText(it)
+                    }
+                ).also { it.attach(keyView); qwertyControllers.add(it) }
+            }
             KeyType.CIRCULAR_FLICK -> {
                 val circularKeyMapsList =
                     keyData.keyId?.let { layout.circularFlickKeyMaps[it] }
@@ -1753,6 +2017,7 @@ class FlickKeyboardView @JvmOverloads constructor(
                     ).apply {
                         setPopupOverlayHostProvider(popupWindowAnchorProvider)
                         setInputTextTransform(::transformInputTextForDisplay)
+                        setActionDisplayTransform(::modifierFlickPresentation)
                         applyPopupViewStyleSet(
                             popupViewStyleSet.directional,
                             popupViewStyleSet.cross
@@ -2642,104 +2907,7 @@ class FlickKeyboardView @JvmOverloads constructor(
                 }
             }
 
-            KeyType.HIERARCHICAL_FLICK -> {
-                val statefulNode = layout.hierarchicalFlickMaps[keyData.label]
-
-                if (statefulNode != null) {
-                    if (keyView is AutoSizeButton) {
-                        applyHierarchicalGuideLabels(keyView, keyData, statefulNode.normalMap)
-                    }
-
-                    Log.d(
-                        "AttachBehavior",
-                        "-> Attaching TfbiHierarchicalFlickController for ${keyData.label}"
-                    )
-
-                    val controller = TfbiHierarchicalFlickController(
-                        context = context,
-                        gestureConfigSource = gestureSessionConfigSource
-                    ).apply {
-                        setPopupWindowAnchorProvider(popupWindowAnchorProvider)
-                        setPopupPresentationMode(tfbiPopupPresentationMode)
-                        setTfbiFlickStartPositionMode(tfbiFlickStartPositionMode)
-                        setInputTextTransform(::transformInputTextForDisplay)
-                        setModeSwitchAngleMargin(hierarchicalFlickModeSwitchAngleMargin)
-                        applyPopupViewStyle(popupViewStyleSet.tfbi)
-                        this.listener = object : TfbiHierarchicalFlickController.TfbiListener {
-                            override fun onPress(character: String) {
-                                notifyTextPress(keyData, character)
-                            }
-
-                            override fun onFlick(character: String) {
-                                Log.d(
-                                    "FlickKeyboardView KeyType.HIERARCHICAL_FLICK",
-                                    "Char: $character"
-                                )
-                                if (character.isNotEmpty()) {
-                                    dispatchCommittedKeyAction(
-                                        keyData,
-                                        KeyAction.Text(character),
-                                        isFlick = true
-                                    )
-                                }
-                            }
-
-                            override fun onSelectionChanged(
-                                character: String?,
-                                isFlick: Boolean
-                            ) = updateTextPreview(keyData, character, isFlick)
-
-                            override fun onCanceled() = cancelTextPreview(keyData)
-
-                            override fun onModeChanged(
-                                newLabel: String,
-                                activeRootMap: Map<TfbiFlickDirection, TfbiFlickNode>
-                            ) {
-                                Log.d(
-                                    "FlickKeyboardView",
-                                    "onModeChanged: keyId=${keyData.keyId}, newLabel=$newLabel"
-                                )
-
-                                keyData.keyId?.let { id ->
-                                    dynamicKeyMap[id]?.let { info ->
-                                        info.keyData = info.keyData.copy(label = newLabel)
-                                    }
-                                }
-
-                                val newVisualKeyData = keyData.copy(label = newLabel)
-                                updateKeyVisuals(keyView, newVisualKeyData)
-                                if (keyView is AutoSizeButton) {
-                                    applyHierarchicalGuideLabels(
-                                        keyView,
-                                        newVisualKeyData,
-                                        activeRootMap
-                                    )
-                                }
-                            }
-                        }
-
-                        attach(keyView, statefulNode)
-                    }
-
-                    when (themeMode) {
-                        "custom" -> {
-                            controller.setPopupColors(
-                                backgroundColor = customSpecialKeyColor,
-                                highlightedColor = manipulateColor(customSpecialKeyColor, 1.2f),
-                                textColor = customSpecialKeyTextColor
-                            )
-                        }
-                    }
-
-                    hierarchicalTfbiControllers.add(controller)
-                    return controller
-                } else {
-                    Log.e(
-                        "AttachBehavior",
-                        "-> FAILED HIERARCHICAL_FLICK: statefulNode is NULL for key '${keyData.label}'"
-                    )
-                }
-            }
+            KeyType.FREE_FLICK -> return null
         }
 
         return null
@@ -2768,6 +2936,7 @@ class FlickKeyboardView @JvmOverloads constructor(
         isFlick: Boolean,
         isLongPress: Boolean = false,
     ) {
+        if (isUnsupported(keyData)) return
         val dispatch = dispatch@{
             val toggleValues = if (
                 !isFlick &&
@@ -2880,7 +3049,7 @@ class FlickKeyboardView @JvmOverloads constructor(
     }
 
     private fun canPreviewText(keyData: KeyData, action: KeyAction.Text): Boolean {
-        return !keyData.isSpecialKey && keyData.effectiveDoubleTapBinding(action) == null
+        return !ctrlLocked && !altLocked && !keyData.isSpecialKey && keyData.effectiveDoubleTapBinding(action) == null
     }
 
     private fun textOutputFromFlickAction(action: FlickAction?): String? {
@@ -2893,6 +3062,10 @@ class FlickKeyboardView @JvmOverloads constructor(
 
     private fun detachKeyBehavior(controller: Any?) {
         when (controller) {
+            is com.kazumaproject.custom_keyboard.controller.PopupMapInputController -> {
+                controller.cancel()
+                popupMapControllers.remove(controller)
+            }
             is CustomAngleFlickController -> {
                 controller.cancel()
                 flickControllers.remove(controller)
@@ -2928,11 +3101,12 @@ class FlickKeyboardView @JvmOverloads constructor(
                 stickyTfbiControllers.remove(controller)
             }
 
-            is TfbiHierarchicalFlickController -> {
-                controller.cancel()
-                hierarchicalTfbiControllers.remove(controller)
-            }
 
+
+            is QwertyKeyInputController -> {
+                controller.cancel()
+                qwertyControllers.remove(controller)
+            }
             is TapLongPressInputController -> {
                 controller.cancel()
                 tapLongPressControllers.remove(controller)
@@ -2971,7 +3145,14 @@ class FlickKeyboardView @JvmOverloads constructor(
         val localOffsetX: Float = 0f,
         val localOffsetY: Float = 0f,
         val displayScaleX: Float = 1f,
-        val displayScaleY: Float = 1f
+        val displayScaleY: Float = 1f,
+        val inverseKeyMatrix: Matrix? = null,
+        val ownerOriginX: Float = 0f,
+        val ownerOriginY: Float = 0f,
+        val ownerScaleX: Float = 1f,
+        val ownerScaleY: Float = 1f,
+        val keyLeft: Int = 0,
+        val keyTop: Int = 0,
     )
 
     private val motionTargets = mutableMapOf<Int, MotionTarget>()
@@ -2980,6 +3161,8 @@ class FlickKeyboardView @JvmOverloads constructor(
 
     private fun cancelInputControllers() {
         controllerRebindPending = true
+        popupMapControllers.forEach { it.cancel() }
+        popupMapControllers.clear()
         flickControllers.forEach { it.cancel() }
         flickControllers.clear()
         crossFlickControllers.forEach { it.cancel() }
@@ -2992,13 +3175,19 @@ class FlickKeyboardView @JvmOverloads constructor(
         tfbiControllers.clear()
         flickLongPressControllers.forEach { it.cancel() }
         flickLongPressControllers.clear()
+        qwertyControllers.forEach { it.cancel() }
+        qwertyControllers.clear()
         stickyTfbiControllers.forEach { it.cancel() }
         stickyTfbiControllers.clear()
-        hierarchicalTfbiControllers.forEach { it.cancel() }
-        hierarchicalTfbiControllers.clear()
         tapLongPressControllers.forEach { it.cancel() }
         tapLongPressControllers.clear()
         keyInfos.forEach { it.controller = null }
+    }
+
+    private fun restorePersistentKeyHighlights() {
+        // Controllers clear the transient pressed state on UP/CANCEL. Keep the layout
+        // selection visible, including when tapping the already selected mode.
+        keyInfos.forEach { if (it.keyData.isHiLighted) it.view.isPressed = true }
     }
 
     /** Reconnect disposed handlers without replacing keys or resetting their dynamic state. */
@@ -3010,6 +3199,7 @@ class FlickKeyboardView @JvmOverloads constructor(
         keyInfos.forEach { info ->
             info.controller = attachKeyBehavior(info.view, info.keyData)
         }
+        restorePersistentKeyHighlights()
     }
 
     private fun cancelTrackedTouchState() {
@@ -3049,6 +3239,7 @@ class FlickKeyboardView @JvmOverloads constructor(
 
         motionTargets.clear()
         pointerDownTime.clear()
+        restorePersistentKeyHighlights()
     }
 
     private fun View.displayScale(): Pair<Float, Float> {
@@ -3062,6 +3253,7 @@ class FlickKeyboardView @JvmOverloads constructor(
     }
 
     private fun findTargetView(displayX: Float, displayY: Float): MotionTarget? {
+        if (!geometry.isDefault) return findGeometryTarget(displayX, displayY)
         when (keyHitTestMode) {
             KeyHitTestMode.NEAREST_KEY -> return findNearestKeyTarget(displayX, displayY)
             KeyHitTestMode.NEAREST_KEY_IN_KEY_CELLS ->
@@ -3093,6 +3285,37 @@ class FlickKeyboardView @JvmOverloads constructor(
         return null
     }
 
+    private fun findGeometryTarget(displayX: Float, displayY: Float): MotionTarget? {
+        if (!displayX.isFinite() || !displayY.isFinite() || visibility != View.VISIBLE || !isEnabled) return null
+        val location = IntArray(2).also(::getLocationOnScreen)
+        val (sx, sy) = displayScale()
+        if (sx <= 0f || sy <= 0f) return null
+        val x = (displayX - location[0]) / sx
+        val y = (displayY - location[1]) / sy
+        if (x < 0f || x >= width || y < 0f || y >= height) return null
+        val views = keyInfos.filter {
+            it.view.visibility == View.VISIBLE && it.view.width > 0 && it.view.height > 0 &&
+                (it.view.isEnabled || isUnsupported(it.keyData))
+        }.map { it.view }
+        val hit = views.firstOrNull { KeyboardViewGeometry.containsParentPoint(it, x, y) }
+        val selected = hit ?: if (keyHitTestMode == KeyHitTestMode.NEAREST_KEY) views.minByOrNull { key ->
+            val (cx, cy) = KeyboardViewGeometry.centerInParent(key)
+            (x - cx) * (x - cx) + (y - cy) * (y - cy)
+        } else null
+        selected ?: return null
+        if (!selected.isEnabled) return null
+        val inverse = Matrix()
+        if (!selected.matrix.invert(inverse)) return null
+        val local = KeyboardViewGeometry.parentToLocal(selected, x, y) ?: return null
+        return MotionTarget(
+            view = selected, displayOriginX = 0f, displayOriginY = 0f,
+            localOffsetX = if (hit == null) local.first.coerceIn(0f, selected.width - 1f) - local.first else 0f,
+            localOffsetY = if (hit == null) local.second.coerceIn(0f, selected.height - 1f) - local.second else 0f,
+            inverseKeyMatrix = inverse, ownerOriginX = location[0].toFloat(), ownerOriginY = location[1].toFloat(),
+            ownerScaleX = sx, ownerScaleY = sy, keyLeft = selected.left, keyTop = selected.top,
+        )
+    }
+
     /**
      * Read current screen bounds at DOWN (also POINTER_DOWN), never cached layout geometry.
      * [requireKeyCell] keeps explicit blank grid cells and spacers untouchable while allowing
@@ -3118,7 +3341,9 @@ class FlickKeyboardView @JvmOverloads constructor(
         var isWithinKeyCell = false
         for (info in keyInfos) {
             val key = info.view
-            if (key.visibility != View.VISIBLE || !key.isEnabled || key.width <= 0 || key.height <= 0) {
+            if (key.visibility != View.VISIBLE || key.width <= 0 || key.height <= 0 ||
+                (!key.isEnabled && !isUnsupported(info.keyData))
+            ) {
                 continue
             }
             key.getLocationOnScreen(location)
@@ -3139,7 +3364,7 @@ class FlickKeyboardView @JvmOverloads constructor(
             val screenHeight = key.height * sy
             if (displayX >= left && displayX < left + screenWidth &&
                 displayY >= top && displayY < top + screenHeight
-            ) return MotionTarget(key, left, top, displayScaleX = sx, displayScaleY = sy)
+            ) return if (key.isEnabled) MotionTarget(key, left, top, displayScaleX = sx, displayScaleY = sy) else null
 
             val dx = displayX - (left + screenWidth / 2f)
             val dy = displayY - (top + screenHeight / 2f)
@@ -3160,7 +3385,7 @@ class FlickKeyboardView @JvmOverloads constructor(
             }
         }
         if (requireKeyCell && !isWithinKeyCell) return null
-        return nearest
+        return nearest?.takeIf { it.view.isEnabled }
     }
 
     private fun MotionEvent.displayX(pointerIndex: Int): Float {
@@ -3199,10 +3424,20 @@ class FlickKeyboardView @JvmOverloads constructor(
         )
         // A fixed local translation admits a margin-origin touch without changing raw screen
         // coordinates or movement deltas. Re-clamping MOVE would distort/cancel flick gestures.
-        childEvent.offsetLocation(
-            (displayX - target.displayOriginX) / target.displayScaleX + target.localOffsetX - displayX,
-            (displayY - target.displayOriginY) / target.displayScaleY + target.localOffsetY - displayY
-        )
+        val inverse = target.inverseKeyMatrix
+        if (inverse != null) {
+            val point = floatArrayOf(
+                (displayX - target.ownerOriginX) / target.ownerScaleX - target.keyLeft,
+                (displayY - target.ownerOriginY) / target.ownerScaleY - target.keyTop,
+            )
+            inverse.mapPoints(point)
+            childEvent.offsetLocation(point[0] + target.localOffsetX - displayX, point[1] + target.localOffsetY - displayY)
+        } else {
+            childEvent.offsetLocation(
+                (displayX - target.displayOriginX) / target.displayScaleX + target.localOffsetX - displayX,
+                (displayY - target.displayOriginY) / target.displayScaleY + target.localOffsetY - displayY
+            )
+        }
         target.view.dispatchTouchEvent(childEvent)
         childEvent.recycle()
     }
@@ -3226,6 +3461,20 @@ class FlickKeyboardView @JvmOverloads constructor(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if(keySelection!=null) return handleSelectionTouch(event)
+        return try {
+            handleKeyboardTouchEvent(event)
+        } finally {
+            if (event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_POINTER_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                restorePersistentKeyHighlights()
+            }
+        }
+    }
+
+    private fun handleKeyboardTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             independentMultiTouchForCurrentGesture = runtimeGestureSettings.snapshot().independentMultiTouchEnabled
         }

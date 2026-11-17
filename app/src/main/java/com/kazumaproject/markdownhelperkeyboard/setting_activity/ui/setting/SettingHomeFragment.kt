@@ -16,7 +16,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.annotation.AttrRes
-import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
@@ -53,6 +52,7 @@ class SettingHomeFragment : Fragment() {
     private var frequentCandidatesJob: Job? = null
     private var initialDataJob: Job? = null
     private var loadingUi: SettingsLoadingUi? = null
+    private var keyboardPreview: com.kazumaproject.markdownhelperkeyboard.keyboard_presentation.KeyboardPreviewCarousel? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -71,6 +71,15 @@ class SettingHomeFragment : Fragment() {
         loadAndRenderFrequentCards()
         renderCategoryRows()
         renderManagementRows()
+        keyboardPreview = com.kazumaproject.markdownhelperkeyboard.keyboard_presentation.KeyboardPreviewCarousel(
+            requireContext(), viewLifecycleOwner, childFragmentManager, binding.settingHomePreviewSummary,
+        ) {
+            viewLifecycleOwner.lifecycleScope.launch {
+                val target = com.kazumaproject.markdownhelperkeyboard.keyboard_presentation.currentKeyboardPreviewTarget(requireContext())
+                navigateSafely(com.kazumaproject.markdownhelperkeyboard.keyboard_presentation.keyboardSettingsDestination(target.type))
+            }
+        }.also { binding.settingHomePreview.addView(it) }
+        binding.settingHomeKeyboardList.setOnClickListener { navigateSafely(R.id.keyboardSelectionFragment) }
 
         binding.settingHomeSearchButton.setOnClickListener {
             navigateSafely(R.id.settingSearchFragment)
@@ -108,6 +117,8 @@ class SettingHomeFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
+        keyboardPreview?.reload()
+        frequentCandidates = null
         loadAndRenderFrequentCards()
         if (initialDataJob?.isActive != true) loadInitialData()
     }
@@ -115,6 +126,7 @@ class SettingHomeFragment : Fragment() {
     override fun onDestroyView() {
         frequentCandidatesJob = null
         initialDataJob = null
+        keyboardPreview = null
         loadingUi = null
         super.onDestroyView()
         _binding = null
@@ -140,16 +152,23 @@ class SettingHomeFragment : Fragment() {
     }
 
     private fun renderFrequentCards(candidates: List<SettingDestination>) {
-        val columnCount = if (resources.configuration.screenWidthDp >= 600) 3 else 2
+        val columnCount = when {
+            resources.configuration.fontScale >= 1.3f || resources.configuration.screenWidthDp < 360 -> 1
+            resources.configuration.screenWidthDp >= 600 -> 3
+            else -> 2
+        }
         binding.settingHomeFrequentGrid.columnCount = columnCount
         binding.settingHomeFrequentGrid.removeAllViews()
-        homeFrequentDestinations(candidates).forEach { destination ->
+        homeFrequentDestinations(candidates).filter {
+            it.key != "fever_settings" || SettingDestinations.isFeverSelected(requireContext())
+        }.forEach { destination ->
             binding.settingHomeFrequentGrid.addView(
                 createFrequentCard(destination),
                 GridLayout.LayoutParams().apply {
                     width = 0
                     height = ViewGroup.LayoutParams.WRAP_CONTENT
                     columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                    setGravity(Gravity.FILL)
                     setMargins(dp(4), dp(4), dp(4), dp(4))
                 }
             )
@@ -158,7 +177,7 @@ class SettingHomeFragment : Fragment() {
 
     private fun renderCategoryRows() {
         binding.settingHomeCategoryList.removeAllViews()
-        SettingDestinations.categories(requireContext()).forEach { destination ->
+        SettingDestinations.homeCategories(requireContext()).forEach { destination ->
             binding.settingHomeCategoryList.addView(createCategoryRow(destination))
         }
     }
@@ -178,13 +197,12 @@ class SettingHomeFragment : Fragment() {
         val switchTarget = destination.destination as? SettingDestinationType.SwitchPreference
         val switchValue = switchTarget?.let { settingCardEditorController.readSwitchPreference(it) }
         val card = MaterialCardView(context).apply {
-            radius = dp(8).toFloat()
-            strokeWidth = dp(1)
+            radius = dp(14).toFloat()
+            strokeWidth = 0
             setStrokeColor(resolveColor(MaterialR.attr.colorOutline))
-            setCardBackgroundColor(resolveColor(MaterialR.attr.colorSurfaceVariant))
+            setCardBackgroundColor(resolveColor(MaterialR.attr.colorSurfaceContainerLow))
             isClickable = true
             isFocusable = true
-            foreground = selectableItemBackground(context)
             contentDescription = listOf(title, summary, valueText)
                 .filter { !it.isNullOrBlank() }
                 .joinToString(". ")
@@ -193,100 +211,32 @@ class SettingHomeFragment : Fragment() {
         }
 
         val content = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-            minimumHeight = dp(120)
-        }
-
-        val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            minimumHeight = dp(80)
         }
-        headerRow.addView(
-            ImageView(context).apply {
-                setImageResource(destination.iconRes)
-                imageTintList = ColorStateList.valueOf(resolveColor(AppCompatR.attr.colorPrimary))
-            },
-            LinearLayout.LayoutParams(dp(28), dp(28))
-        )
-        if (switchTarget != null && switchValue != null) {
-            headerRow.addView(
-                View(context),
-                LinearLayout.LayoutParams(0, 1, 1f)
-            )
-            headerRow.addView(
-                SwitchCompat(context).apply {
-                    isChecked = switchValue
-                    isClickable = false
-                    isFocusable = false
-                    contentDescription = title
-                    ViewCompat.setStateDescription(this, statusLabel(switchValue))
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-            )
-        } else if (!settingCardEditorController.isDirectEditable(destination)) {
-            headerRow.addView(
-                View(context),
-                LinearLayout.LayoutParams(0, 1, 1f)
-            )
-            headerRow.addView(
-                ImageView(context).apply {
-                    setImageResource(CoreR.drawable.baseline_arrow_right_24)
-                    imageTintList =
-                        ColorStateList.valueOf(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-                },
-                LinearLayout.LayoutParams(dp(24), dp(24))
-            )
-        }
-        content.addView(headerRow)
-        content.addView(
-            TextView(context).apply {
-                text = title
+        content.addView(ImageView(context).apply {
+            setImageResource(destination.iconRes)
+            imageTintList = ColorStateList.valueOf(resolveColor(AppCompatR.attr.colorPrimary))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) })
+        content.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(context).apply {
+                text = title; textSize = 14f; typeface = Typeface.DEFAULT_BOLD
                 setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                typeface = Typeface.DEFAULT_BOLD
-                maxLines = 2
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(12)
-            }
-        )
-        content.addView(
-            TextView(context).apply {
-                text = summary
+            })
+            addView(TextView(context).apply {
+                text = if (switchValue != null) statusLabel(switchValue) else valueText ?: summary
+                textSize = 12f
                 setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                maxLines = 2
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(4)
-            }
-        )
-        valueText?.let { currentValue ->
-            content.addView(
-                TextView(context).apply {
-                    text = currentValue
-                    setTextColor(resolveColor(AppCompatR.attr.colorPrimary))
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                    maxLines = 1
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = dp(8)
-                }
-            )
-        }
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        if (switchValue != null) content.addView(SwitchCompat(context).apply {
+            isChecked = switchValue; isClickable = false; isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(-2, -2))
 
         card.addView(content)
         return card
@@ -297,13 +247,12 @@ class SettingHomeFragment : Fragment() {
         val title = destination.title
         val summary = currentSummary(destination)
         val card = MaterialCardView(context).apply {
-            radius = dp(8).toFloat()
-            strokeWidth = dp(1)
+            radius = 0f
+            strokeWidth = 0
             setStrokeColor(resolveColor(MaterialR.attr.colorOutline))
             setCardBackgroundColor(resolveColor(MaterialR.attr.colorSurface))
             isClickable = true
             isFocusable = true
-            foreground = selectableItemBackground(context)
             contentDescription = "$title. $summary"
             setOnClickListener { navigateTo(destination) }
         }
@@ -312,7 +261,7 @@ class SettingHomeFragment : Fragment() {
             gravity = android.view.Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(14), dp(12), dp(12), dp(12))
-            minimumHeight = dp(76)
+            minimumHeight = resources.getDimensionPixelSize(R.dimen.settings_row_min_height)
         }
 
         row.addView(
@@ -330,7 +279,7 @@ class SettingHomeFragment : Fragment() {
             TextView(context).apply {
                 text = title
                 setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                 typeface = Typeface.DEFAULT_BOLD
                 maxLines = 2
             }
@@ -356,21 +305,12 @@ class SettingHomeFragment : Fragment() {
                 marginStart = dp(14)
             }
         )
-        row.addView(
-            ImageView(context).apply {
-                setImageResource(CoreR.drawable.baseline_arrow_right_24)
-                imageTintList =
-                    ColorStateList.valueOf(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-            },
-            LinearLayout.LayoutParams(dp(24), dp(24))
-        )
-
         card.addView(row)
         card.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
-            bottomMargin = dp(8)
+            bottomMargin = dp(1)
         }
         return card
     }
@@ -521,12 +461,6 @@ class SettingHomeFragment : Fragment() {
         val imm = ContextCompat.getSystemService(requireContext(), InputMethodManager::class.java)
         return imm?.enabledInputMethodList?.any { it.packageName == requireContext().packageName }
     }
-
-    private fun selectableItemBackground(context: Context) =
-        TypedValue().let { value ->
-            context.theme.resolveAttribute(android.R.attr.selectableItemBackground, value, true)
-            AppCompatResources.getDrawable(context, value.resourceId)
-        }
 
     private fun resolveColor(@AttrRes attr: Int): Int {
         val value = TypedValue()

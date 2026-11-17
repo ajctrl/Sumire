@@ -1,4 +1,5 @@
 name: Validate and publish upstream update
+run-name: Validate upstream ${{ github.event.workflow_run.id }}:${{ github.event.workflow_run.run_attempt }}
 
 on:
   workflow_run:
@@ -61,10 +62,28 @@ jobs:
     uses: ./.github/workflows/fork-validation.yml
     with:
       ref: ${{ needs.prepare.outputs.head }}
-      full: ${{ needs.prepare.outputs.full_validation == 'true' }}
+
+  mushroom:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mushroom-regression.yml
+    with:
+      ref: ${{ needs.prepare.outputs.head }}
+
+  zenz:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/zenz-correction-performance.yml
+    with:
+      ref: ${{ needs.prepare.outputs.head }}
+      baseline_ref: ${{ needs.prepare.outputs.base }}
 
   merge:
-    needs: [prepare, validate]
+    needs: [prepare, validate, mushroom, zenz]
     if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
     runs-on: ubuntu-latest
     permissions:

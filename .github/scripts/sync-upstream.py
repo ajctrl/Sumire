@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from types import SimpleNamespace
 
 
 UPSTREAM = "KazumaProject/JapaneseKeyboard"
@@ -26,9 +27,9 @@ spec.loader.exec_module(conflict_resolver)
 spec = importlib.util.spec_from_file_location("upstream_review", Path(__file__).with_name("upstream-review.py"))
 upstream_review = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(upstream_review)
-spec = importlib.util.spec_from_file_location("validation_scope", Path(__file__).with_name("validation-scope.py"))
-validation_scope = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(validation_scope)
+spec = importlib.util.spec_from_file_location("validation_repair", Path(__file__).with_name("validation-repair.py"))
+validation_repair = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validation_repair)
 
 
 def run(*args, check=True):
@@ -160,14 +161,11 @@ def prepare(context):
         # Validate its parents, checkpoint and trusted automation before checkout.
         git("fetch", "--no-tags", "origin", f"refs/heads/{branch}")
         previous = git("rev-parse", "FETCH_HEAD")
-        if (git("show", "-s", "--format=%P", previous) != f"{base} {upstream}"
-                or f"Sumire-Sync-Tree: {git('rev-parse', previous + '^{tree}')}" not in
-                git("show", "-s", "--format=%B", previous).splitlines()
-                or f"Sumire-Conflict-Policy: {conflict_resolver.policy.VERSION}" not in
-                git("show", "-s", "--format=%B", previous).splitlines()
-                or json.loads(git("show", f"{previous}:{STATE}")) != next_state
-                or git("diff", base, previous, "--", ".github", ":(exclude).github/upstream.json")):
-            raise conflict_resolver.policy.ReviewRequired("Existing update branch was modified")
+        validation_repair.candidate_depth(SimpleNamespace(**globals()), base, upstream, previous, next_state)
+        pending = resolver.state.data["repairs"].get(validation_repair.pending_key(base, previous))
+        if pending:
+            validation_repair.resume(SimpleNamespace(**globals()), pending["failed_run"], context)
+            return
         git("switch", "-c", branch, previous)
         run("python3", ".github/scripts/check-fork-invariants.py")
         head = previous
@@ -243,8 +241,8 @@ def prepare(context):
                 f"Upstream: `{upstream}`\nBase: `{base}`\n\n"
                 "The Validate and publish upstream update workflow runs the Lite debug build, all app unit tests, "
                 "Lint and fork invariant checks before merging this exact revision. "
-                "Full debug build, unit tests and Lint also run when native, build, dictionary or Full-specific paths change. "
-                "Device regression tests are not covered.\n\n"
+                "Full debug build, unit tests, Lint, dictionary checks, Mushroom device regression and all Zenz "
+                "performance phases also run before merging. Failed validation starts a separate bounded repair run.\n\n"
                 "Use a merge commit to preserve upstream ancestry.\n")
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as file:
             file.write(body)
@@ -252,8 +250,7 @@ def prepare(context):
             run("gh", "pr", "create", "--repo", repo, "--base", BASE, "--head", branch,
                 "--title", f"Merge upstream {tag}", "--body-file", file.name)
         pr = api(f"repos/{repo}/pulls?state=open&base={BASE}&head={repo.split('/')[0]}:{branch}")[0]["number"]
-    full = validation_scope.requires_full_revision(base, head)
-    output(changed="true", paused="false", head=head, base=base, pr=pr, full_validation=str(full).lower())
+    output(changed="true", paused="false", head=head, base=base, pr=pr, full_validation="true")
     print(f"Prepared https://github.com/{repo}/pull/{pr} at {head}")
 
 
@@ -268,7 +265,11 @@ def review_outcome(context, url):
 def main():
     context = {}
     try:
-        prepare(context)
+        failed_run = os.environ.get("SUMIRE_FAILED_VALIDATION_RUN")
+        if failed_run:
+            validation_repair.resume(SimpleNamespace(**globals()), failed_run, context)
+        else:
+            prepare(context)
     except conflict_resolver.policy.ReviewRequired as error:
         if "upstream" not in context:
             raise

@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.preference.PreferenceManager
 import androidx.test.core.app.ApplicationProvider
 import com.kazumaproject.markdownhelperkeyboard.R
+import com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.SettingSearchIndex
+import com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.SettingSearchScope
+import com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.SettingDestinations
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -21,16 +24,22 @@ class TypeNullInputBehaviorPreferenceTest {
             TYPE_NULL_INPUT_BEHAVIOR_KEY,
             readTypeNullPreference(R.xml.pref_common_legacy).key
         )
-        assertEquals(
-            TYPE_NULL_INPUT_BEHAVIOR_KEY,
-            readTypeNullPreference(R.xml.pref_input_method).key
-        )
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (scope in listOf(SettingSearchScope.NEW_HOME, SettingSearchScope.LEGACY_TABS)) {
+            val result = SettingSearchIndex.searchable(context, scope)
+                .single { it.key == TYPE_NULL_INPUT_BEHAVIOR_KEY }
+            assertEquals(R.id.legacyCommonSectionFragment, SettingDestinations.destinationId(result.destination))
+            assertEquals(TYPE_NULL_INPUT_BEHAVIOR_KEY, SettingDestinations.highlightPreferenceKey(result.destination))
+        }
     }
 
     @Test
     fun legacyAndNewSettingsUseDefaultValue() {
         assertEquals("default", readTypeNullPreference(R.xml.pref_common_legacy).defaultValue)
-        assertEquals("default", readTypeNullPreference(R.xml.pref_input_method).defaultValue)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        PreferenceManager.getDefaultSharedPreferences(context).edit().clear().commit()
+        AppPreference.init(context)
+        assertEquals("default", AppPreference.type_null_input_behavior_preference)
     }
 
     @Test

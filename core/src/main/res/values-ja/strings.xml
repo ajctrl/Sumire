@@ -284,4 +284,5 @@
     <string name="enable_direct_input_mode">直接入力モード</string>
     <string name="cursor_left">カーソルを左に移動</string>
     <string name="cursor_right">カーソルを右に移動</string>
+    <string name="custom_key_unsupported">このキーの形式には対応していません。</string>
 </resources>

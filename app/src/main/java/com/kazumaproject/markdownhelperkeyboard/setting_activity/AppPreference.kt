@@ -15,7 +15,6 @@ import com.kazumaproject.core.data.popup.TfbiFlickStartPositionMode
 import com.kazumaproject.core.data.popup.TfbiPopupPresentationMode
 import com.kazumaproject.custom_keyboard.data.CircularFlickDirection
 import com.kazumaproject.custom_keyboard.data.KeyboardInputMode
-import com.kazumaproject.custom_keyboard.data.SumireFlickInputMode
 import com.kazumaproject.custom_keyboard.data.TfbiFlickRotation
 import com.kazumaproject.custom_keyboard.data.buildEvenCircularRanges
 import com.kazumaproject.domain.EmojiSkinToneSupport
@@ -37,11 +36,15 @@ import com.kazumaproject.markdownhelperkeyboard.ime_service.voice_input.VoiceInp
 import com.kazumaproject.markdownhelperkeyboard.ime_service.voice_input.VoiceInputSpaceReplacement
 import com.kazumaproject.markdownhelperkeyboard.gemma.handwriting.GemmaHandwritingLanguage
 import com.kazumaproject.markdownhelperkeyboard.gemma.handwriting.GemmaHandwritingSettings
+import com.kazumaproject.markdownhelperkeyboard.setting_activity.backup.CustomThemeBackup
 import com.kazumaproject.markdownhelperkeyboard.setting_activity.backup.PrefBackup
 import com.kazumaproject.markdownhelperkeyboard.setting_activity.backup.PrefEntry
 import com.kazumaproject.markdownhelperkeyboard.setting_activity.circular_slot.CircularSlotActionSetting
+import java.io.File
+import java.io.InputStream
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
+import timber.log.Timber
 import com.kazumaproject.core.R as CoreR
 
 internal object CustomThemeColorPreferenceKeys {
@@ -58,6 +61,19 @@ object AppPreference {
     const val VOICE_INPUT_SPACE_REPLACEMENT_ENABLED_KEY = "voice_input_space_replacement_enabled"
     const val VOICE_INPUT_SPACE_REPLACEMENT_KEY = "voice_input_space_replacement"
     const val VOICE_INPUT_SPACE_CUSTOM_TEXT_KEY = "voice_input_space_custom_text"
+    const val VOICE_INPUT_ENGINE_KEY = "voice_input_engine"
+    const val VOICE_INPUT_MODEL_KEY = "voice_input_model"
+    const val VOICE_INPUT_BACKEND_KEY = "voice_input_backend"
+
+    var voice_input_engine: String
+        get() = preferences.getString(VOICE_INPUT_ENGINE_KEY, "system") ?: "system"
+        set(value) = preferences.edit { it.putString(VOICE_INPUT_ENGINE_KEY, value) }
+    var voice_input_model: String
+        get() = preferences.getString(VOICE_INPUT_MODEL_KEY, "") ?: ""
+        set(value) = preferences.edit { it.putString(VOICE_INPUT_MODEL_KEY, value) }
+    var voice_input_backend: String
+        get() = preferences.getString(VOICE_INPUT_BACKEND_KEY, "cpu") ?: "cpu"
+        set(value) = preferences.edit { it.putString(VOICE_INPUT_BACKEND_KEY, value) }
 
     var voice_input_space_replacement_enabled: Boolean
         get() = preferences.getBoolean(VOICE_INPUT_SPACE_REPLACEMENT_ENABLED_KEY, false)
@@ -82,6 +98,9 @@ object AppPreference {
             enabled = voice_input_space_replacement_enabled,
             replacement = VoiceInputSpaceReplacement.fromPreference(voice_input_space_replacement),
             customText = voice_input_space_custom_text,
+            engine = voice_input_engine,
+            modelPath = voice_input_model,
+            backend = voice_input_backend,
         )
 
     const val PRESERVE_DICTIONARY_WORD_WHITESPACE_KEY =
@@ -134,16 +153,21 @@ object AppPreference {
     const val FLICK_THRESHOLD_SHAPE_KEY = "flick_threshold_shape_preference"
     const val TFBI_DIAGONAL_RECOGNITION_MODE_KEY = "tfbi_diagonal_recognition_mode_preference"
     const val SUMIRE_FLICK_ROTATION_KEY = "sumire_flick_rotation_preference"
-    const val SUMIRE_FLICK_INPUT_MODE_KEY = "sumire_flick_input_mode_preference"
+    const val SUMIRE_MODE_KEY_HIGHLIGHT_KEY = "sumire_mode_key_highlight_preference"
     const val FLICK_TFBI_POPUP_PRESENTATION_KEY = "flick_tfbi_popup_presentation_preference"
     const val FLICK_TFBI_FLICK_START_POSITION_KEY =
         "flick_tfbi_flick_start_position_preference"
     const val FLICK_EDITOR_PREVIEW_KEY = "flick_editor_preview_preference"
+    const val TENKEY_SHOW_FLICK_POPUP_KEY = "tenkey_show_flick_popup_preference"
+    const val TENKEY_SHOW_LONG_PRESS_POPUP_KEY = "tenkey_show_long_press_popup_preference"
+    const val SUMIRE_SHOW_FLICK_POPUP_KEY = "sumire_show_flick_popup_preference"
+    const val SUMIRE_SHOW_LONG_PRESS_POPUP_KEY = "sumire_show_long_press_popup_preference"
     const val TENKEY_KEYMAP_GUIDE_JAPANESE_KEY = "tenkey_keymap_guide"
     const val TENKEY_KEYMAP_GUIDE_ENGLISH_KEY = "tenkey_keymap_guide_english"
     const val TENKEY_KEYMAP_GUIDE_NUMBER_KEY = "tenkey_keymap_guide_number"
     const val TENKEY_USE_THREE_STATE_KEY = "tenkey_use_three_state_keyboard_preference"
     const val TENKEY_NUMBER_SYMBOL_KEY_GAP_KEY = "tenkey_number_symbol_key_gap_preference"
+    const val TENKEY_SPECIAL_KEY_LABEL_SCALE_KEY = "tenkey_special_key_label_scale_percent"
     const val SUMIRE_KEYMAP_GUIDE_JAPANESE_KEY = "sumire_keymap_guide_japanese"
     const val SUMIRE_KEYMAP_GUIDE_ENGLISH_KEY = "sumire_keymap_guide_english"
     const val SUMIRE_KEYMAP_GUIDE_NUMBER_KEY = "sumire_keymap_guide_number"
@@ -335,8 +359,6 @@ object AppPreference {
         Pair("flick_guide_text_size_sp_preference", 9)
     private val FLICK_GUIDE_MAX_CHARACTERS_PREFERENCE =
         Pair("flick_guide_max_characters_preference", 1)
-    private val HIERARCHICAL_FLICK_MODE_SWITCH_ANGLE_MARGIN =
-        Pair("hierarchical_flick_mode_switch_angle_margin_preference", 20)
 
     private val CUSTOM_KEYBOARD_TWO_WORDS_OUTPUTS =
         Pair("custom_keyboard_two_words_preference", true)
@@ -382,6 +404,9 @@ object AppPreference {
 
     private val QWERTY_ZENKAKU_SPACE_PREFERENCE =
         Pair("qwerty_romaji_zenkaku_space_preference", false)
+
+    private val QWERTY_ROMAJI_INITIAL_INPUT_MODE =
+        Pair("qwerty_romaji_initial_input_mode_preference", "japanese")
 
     private val QWERTY_ROMAJI_HANKAKU_NUMBER_PREFERENCE =
         Pair("qwerty_romaji_hankaku_number_preference", false)
@@ -749,9 +774,6 @@ object AppPreference {
     private val ENABLE_ZENZ_PREFERENCE =
         Pair("enable_ai_conversion_zenz_preference", false)
 
-    private val ENABLE_ZENZAI_PREFERENCE =
-        Pair("enable_ai_conversion_zenzai_preference", false)
-
     private val ZENZ_PROFILE_PREFERENCE =
         Pair("zenz_profile_string_preference", "")
 
@@ -864,6 +886,7 @@ object AppPreference {
         Pair("qwerty_keyboard_margin_end_dp_landscape_preference", 0)
 
     private val ZENZ_MODEL_URI_PREFERENCE = Pair("zenz_model_uri_preference", "")
+    private const val ZENZ_MODEL_SELECTION_VERSION = "zenz_model_selection_version"
     private val ENABLE_GEMMA_TRANSLATION_PREFERENCE =
         Pair("gemma_translation_enable_preference", false)
     private val GEMMA_TRANSLATION_BACKEND_PREFERENCE =
@@ -1004,8 +1027,22 @@ object AppPreference {
                 } catch (_: Throwable) {
                     // init completed its future exceptionally; the loading UI owns retry.
                 }
+                runCatching { removeObsoleteCandidateScorerData(context.applicationContext) }
+                    .onFailure { Timber.w(it, "Could not remove obsolete candidate scorer data") }
             }, "AppPreferenceInit").start()
         }
+    }
+
+    private fun removeObsoleteCandidateScorerData(context: Context) {
+        context.deleteSharedPreferences("candidate_scoring_models")
+        // The importer wrote copies here. Never follow paths from the old preferences.
+        val directory = File(context.noBackupFilesDir.canonicalFile, "candidate-scorer")
+        if (!directory.isDirectory || directory.canonicalFile != directory) return
+        val extensions = setOf("gguf", "onnx", "model")
+        directory.listFiles { file ->
+            file.isFile && file.name.startsWith("scorer-") && file.extension in extensions
+        }?.forEach { it.delete() }
+        directory.delete()
     }
 
     suspend fun awaitInitializationSuspending() = kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
@@ -1033,6 +1070,8 @@ object AppPreference {
                 appContext.codeCacheDir.setReadOnly()
                 isTabletDevice = context.resources.getBoolean(CoreR.bool.isTablet)
                 loadedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+                CustomQwertyPopupPreferences.migrate(preferences)
+                com.kazumaproject.markdownhelperkeyboard.setting_activity.keyboard_size.IndependentKeyboardSizePreferences.migrate(preferences)
                 migrateCandidateHeightDefaultsIfNeeded()
                 removeUnsafeLegacyGemmaHandwritingPrompt()
                 migratePredictionLookaheadPreferenceIfNeeded()
@@ -1040,6 +1079,7 @@ object AppPreference {
                 migrateSumireKeymapGuideModesIfNeeded()
                 migrateGojuonKeyboardTypeIfNeeded(context)
                 migrateSumirePreferenceIfNeeded()
+                removeRetiredFlickPreferences()
                 initialized = true
                 initialization.complete(Unit)
             } catch (failure: Throwable) {
@@ -1680,6 +1720,14 @@ object AppPreference {
             it.putBoolean(QWERTY_ENABLE_FLICK_DOWN_WINDOW.first, value ?: false)
         }
 
+    var qwerty_romaji_initial_input_mode_preference: String
+        get() = preferences.getString(
+            QWERTY_ROMAJI_INITIAL_INPUT_MODE.first, QWERTY_ROMAJI_INITIAL_INPUT_MODE.second
+        ) ?: QWERTY_ROMAJI_INITIAL_INPUT_MODE.second
+        set(value) = preferences.edit {
+            it.putString(QWERTY_ROMAJI_INITIAL_INPUT_MODE.first, value)
+        }
+
     var qwerty_enable_zenkaku_space_preference: Boolean?
         get() = preferences.getBoolean(
             QWERTY_ZENKAKU_SPACE_PREFERENCE.first, QWERTY_ZENKAKU_SPACE_PREFERENCE.second
@@ -1946,25 +1994,21 @@ object AppPreference {
             it.putString(SUMIRE_FLICK_ROTATION_KEY, value.preferenceValue)
         }
 
-    var sumire_flick_input_mode_preference: SumireFlickInputMode
-        get() = SumireFlickInputMode.fromPreferenceValue(
-            preferences.getString(SUMIRE_FLICK_INPUT_MODE_KEY, SumireFlickInputMode.ALL.preferenceValue)
-        )
-        set(value) = preferences.edit {
-            it.putString(SUMIRE_FLICK_INPUT_MODE_KEY, value.preferenceValue)
-        }
+    val tenkey_show_flick_popup_preference: Boolean
+        get() = preferences.getBoolean(TENKEY_SHOW_FLICK_POPUP_KEY, true)
 
-    var hierarchical_flick_mode_switch_angle_margin_preference: Int
-        get() = preferences.getInt(
-            HIERARCHICAL_FLICK_MODE_SWITCH_ANGLE_MARGIN.first,
-            HIERARCHICAL_FLICK_MODE_SWITCH_ANGLE_MARGIN.second
-        ).coerceIn(0, 34)
-        set(value) = preferences.edit {
-            it.putInt(
-                HIERARCHICAL_FLICK_MODE_SWITCH_ANGLE_MARGIN.first,
-                value.coerceIn(0, 34)
-            )
-        }
+    val tenkey_show_long_press_popup_preference: Boolean
+        get() = preferences.getBoolean(TENKEY_SHOW_LONG_PRESS_POPUP_KEY, true)
+
+    val sumire_show_flick_popup_preference: Boolean
+        get() = preferences.getBoolean(SUMIRE_SHOW_FLICK_POPUP_KEY, true)
+
+    val sumire_show_long_press_popup_preference: Boolean
+        get() = preferences.getBoolean(SUMIRE_SHOW_LONG_PRESS_POPUP_KEY, true)
+
+    var sumire_mode_key_highlight_preference: Boolean
+        get() = preferences.getBoolean(SUMIRE_MODE_KEY_HIGHLIGHT_KEY, false)
+        set(value) = preferences.edit { it.putBoolean(SUMIRE_MODE_KEY_HIGHLIGHT_KEY, value) }
 
     var independent_multi_touch_preference: Boolean
         get() = preferences.getBoolean(INDEPENDENT_MULTI_TOUCH_KEY, false)
@@ -2428,6 +2472,24 @@ object AppPreference {
             it.putBoolean(PRESERVE_DICTIONARY_WORD_WHITESPACE_KEY, value)
         }
 
+    val candidateIndicatorStyles: com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.CandidateIndicatorStyles
+        get() = com.kazumaproject.markdownhelperkeyboard.ime_service.adapters.CandidateIndicatorSettings.read(preferences)
+
+    const val CANDIDATE_CHARACTER_INDICATORS_KEY = "candidate_character_type_indicators_preference"
+    const val CANDIDATE_CHARACTER_TYPE_LABELS_KEY = "candidate_character_type_labels_preference"
+
+    var candidate_character_type_labels_preference: Boolean
+        get() = preferences.getBoolean(CANDIDATE_CHARACTER_TYPE_LABELS_KEY, true)
+        set(value) = preferences.edit {
+            it.putBoolean(CANDIDATE_CHARACTER_TYPE_LABELS_KEY, value)
+        }
+
+    var candidate_character_type_indicators_preference: Boolean
+        get() = preferences.getBoolean(CANDIDATE_CHARACTER_INDICATORS_KEY, false)
+        set(value) = preferences.edit {
+            it.putBoolean(CANDIDATE_CHARACTER_INDICATORS_KEY, value)
+        }
+
     var show_dictionary_candidate_labels_preference: Boolean
         get() = preferences.getBoolean(
             SHOW_DICTIONARY_CANDIDATE_LABELS_PREFERENCE.first,
@@ -2787,6 +2849,10 @@ object AppPreference {
             it.putBoolean(CUSTOM_DIRECT_INPUT_REPLACE_COMPOSING_KEY, value)
         }
 
+    var custom_keyboard_show_key_preview: Boolean
+        get() = preferences.getBoolean("custom_keyboard_show_key_preview", true)
+        set(value) = preferences.edit { it.putBoolean("custom_keyboard_show_key_preview", value) }
+
     var custom_keyboard_input_in_empty_areas_preference: Boolean
         get() = preferences.getBoolean(
             CUSTOM_KEYBOARD_INPUT_IN_EMPTY_AREAS_PREFERENCE.first,
@@ -2857,8 +2923,21 @@ object AppPreference {
             it.putString(SUMIRE_INPUT_SELECTION_PREFERENCE.first, value ?: "toggle-default")
         }
 
+    /** Remove retired settings on startup, including after restoring an old preferences backup. */
+    private fun removeRetiredFlickPreferences() {
+        val oldMode = "sumire_flick_input_mode_preference"
+        val oldAngle = "hierarchical_flick_mode_switch_angle_margin_preference"
+        val oldStyle = preferences.getString(NEW_SUMIRE_STYLE_KEY, "default") == "third-flick"
+        if (!oldStyle && !preferences.contains(oldMode) && !preferences.contains(oldAngle)) return
+        preferences.edit {
+            it.remove(oldMode).remove(oldAngle)
+            if (oldStyle) it.putString(NEW_SUMIRE_STYLE_KEY, "default").putString(NEW_SUMIRE_METHOD_KEY, "flick")
+        }
+    }
+
     var sumire_keyboard_style: String
-        get() = preferences.getString(NEW_SUMIRE_STYLE_KEY, "default") ?: "default"
+        get() = preferences.getString(NEW_SUMIRE_STYLE_KEY, "default")
+            ?.takeIf { it in setOf("default", "circle", "second-flick", "center-guide-flick", "sumire", "free-popup") } ?: "default"
         set(value) = preferences.edit {
             it.putString(NEW_SUMIRE_STYLE_KEY, value)
         }
@@ -3498,6 +3577,13 @@ object AppPreference {
             )
         }
 
+    var tenkey_special_key_label_scale_percent: Int
+        get() = preferences.getInt(TENKEY_SPECIAL_KEY_LABEL_SCALE_KEY, 100).coerceIn(60, 150)
+        set(value) = preferences.edit {
+            if (value == 100) it.remove(TENKEY_SPECIAL_KEY_LABEL_SCALE_KEY)
+            else it.putInt(TENKEY_SPECIAL_KEY_LABEL_SCALE_KEY, value.coerceIn(60, 150))
+        }
+
     var gojuon_key_width_scale_percent: Int
         get() = preferences.getInt("gojuon_key_width_scale_percent", 100).coerceIn(60, 140)
         set(value) = preferences.edit { it.putInt("gojuon_key_width_scale_percent", value.coerceIn(60, 140)) }
@@ -3635,6 +3721,9 @@ object AppPreference {
         set(value) = preferences.edit {
             it.putFloat(TENKEY_POPUP_TEXT_SIZE_SP.first, value ?: TENKEY_POPUP_TEXT_SIZE_SP.second)
         }
+
+    val custom_qwerty_popup_preferences: CustomQwertyPopupPreferences
+        get() = CustomQwertyPopupPreferences(preferences)
 
     var qwerty_key_preview_popup_size_scale_percent: Int?
         get() = preferences.getInt(
@@ -3982,15 +4071,6 @@ object AppPreference {
             it.putBoolean(ENABLE_ZENZ_PREFERENCE.first, value)
         }
 
-    var enable_zenzai_preference: Boolean
-        get() = preferences.getBoolean(
-            ENABLE_ZENZAI_PREFERENCE.first,
-            ENABLE_ZENZAI_PREFERENCE.second
-        )
-        set(value) = preferences.edit {
-            it.putBoolean(ENABLE_ZENZAI_PREFERENCE.first, value)
-        }
-
     var zenz_profile_preference: String
         get() = preferences.getString(
             ZENZ_PROFILE_PREFERENCE.first,
@@ -4008,6 +4088,9 @@ object AppPreference {
         set(value) = preferences.edit {
             it.putBoolean(ENABLE_ZENZ_CONVERSION_LONG_PRESS_PREFERENCE.first, value)
         }
+
+    val enable_zenzai_preference: Boolean
+        get() = preferences.getBoolean("enable_ai_conversion_zenzai_preference", false)
 
     var enable_zenz_rerank_preference: Boolean
         get() = preferences.getBoolean(
@@ -4515,7 +4598,12 @@ object AppPreference {
         ) ?: ""
         set(value) = preferences.edit {
             it.putString(ZENZ_MODEL_URI_PREFERENCE.first, value)
+            // Selecting the same URI again can mean that its model bytes were replaced.
+            it.putString(ZENZ_MODEL_SELECTION_VERSION, java.util.UUID.randomUUID().toString())
         }
+
+    val zenz_model_selection_version: String
+        get() = preferences.getString(ZENZ_MODEL_SELECTION_VERSION, "").orEmpty()
 
     var enable_gemma_translation_preference: Boolean
         get() = preferences.getBoolean(
@@ -5197,6 +5285,60 @@ object AppPreference {
         )
     }
 
+    private val customThemeBackup by lazy {
+        CustomThemeBackup(
+            preferenceDefaults = listOf(
+                KEYBOARD_THEME_MODE,
+                KeyboardSkinId.PREFERENCE_KEY to KeyboardSkinId.DEFAULT.preferenceValue,
+                CUSTOM_THEME_BG_COLOR,
+                CUSTOM_THEME_KEY_COLOR,
+                CUSTOM_THEME_SPECIAL_KEY_COLOR,
+                CUSTOM_THEME_KEY_TEXT_COLOR,
+                CUSTOM_THEME_SPECIAL_KEY_TEXT_COLOR,
+                CUSTOM_THEME_CANDIDATE_TEXT_COLOR,
+                CUSTOM_THEME_CANDIDATE_ITEM_BG_COLOR,
+                CUSTOM_THEME_CANDIDATE_ITEM_PRESSED_BG_COLOR,
+                CUSTOM_THEME_CANDIDATE_EMPTY_POPUP_BG_COLOR,
+                CUSTOM_THEME_CANDIDATE_EMPTY_POPUP_TEXT_COLOR,
+                CUSTOM_THEME_SHORTCUT_ICON_COLOR,
+                KEY_POPUP_USE_CUSTOM_COLOR,
+                KEY_POPUP_BACKGROUND_COLOR,
+                KEY_POPUP_TEXT_COLOR,
+                CUSTOM_THEME_INPUT_COLOR_ENABLE,
+                CUSTOM_THEME_PRE_EDIT_BG,
+                CUSTOM_THEME_PRE_EDIT_TEXT,
+                CUSTOM_THEME_POST_EDIT_BG,
+                CUSTOM_THEME_POST_EDIT_TEXT,
+                CUSTOM_THEME_BORDER_ENABLE,
+                CUSTOM_THEME_BORDER_COLOR,
+                CUSTOM_THEME_BORDER_WIDTH,
+                ROUND_KEYBOARD_CORNER_PREFERENCE,
+                KEYBOARD_CORNER_RADIUS_DP_PREFERENCE,
+                KEYBOARD_CORNER_TOP_LEFT_PREFERENCE,
+                KEYBOARD_CORNER_TOP_RIGHT_PREFERENCE,
+                KEYBOARD_CORNER_BOTTOM_LEFT_PREFERENCE,
+                KEYBOARD_CORNER_BOTTOM_RIGHT_PREFERENCE,
+                LIQUID_GLASS_ENABLE,
+                LIQUID_GLASS_BLUR_RADIUS,
+                LIQUID_GLASS_KEY_ALPHA,
+            ),
+            integerRanges = mapOf(
+                CUSTOM_THEME_BORDER_WIDTH.first to 1..8,
+                KEYBOARD_CORNER_RADIUS_DP_PREFERENCE.first to 0..64,
+                LIQUID_GLASS_BLUR_RADIUS.first to 0..255,
+                LIQUID_GLASS_KEY_ALPHA.first to 0..255,
+            ),
+            stringValues = mapOf(
+                KEYBOARD_THEME_MODE.first to setOf("default", "light", "dark", "custom"),
+                KeyboardSkinId.PREFERENCE_KEY to KeyboardSkinId.entries.map { it.preferenceValue }.toSet(),
+            ),
+        )
+    }
+
+    internal fun exportCustomThemeToJson(): String = customThemeBackup.export(preferences)
+
+    internal fun importCustomThemeFromJson(input: InputStream) = customThemeBackup.restore(input, preferences)
+
     /**
      * SharedPreferences 全体を JSON として書き出す（将来キーが増えても自動対応）
      */
@@ -5267,6 +5409,8 @@ object AppPreference {
         }
         migrateSumireKeymapGuideModesIfNeeded()
         migrateGojuonKeyboardTypeIfNeeded()
+        CustomQwertyPopupPreferences.migrate(preferences)
+        com.kazumaproject.markdownhelperkeyboard.setting_activity.keyboard_size.IndependentKeyboardSizePreferences.migrate(preferences)
         return backup.shortcutIds
     }
 

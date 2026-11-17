@@ -1,5 +1,7 @@
 package com.kazumaproject.markdownhelperkeyboard.custom_keyboard.ui
 
+import com.kazumaproject.custom_keyboard.data.PopupKeyConfig
+import com.kazumaproject.custom_keyboard.data.PopupKeyConfigCodec
 import android.Manifest
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -44,6 +46,9 @@ import com.kazumaproject.custom_keyboard.data.KeyIconResolver
 import com.kazumaproject.custom_keyboard.data.KeyIconType
 import com.kazumaproject.custom_keyboard.data.KeyItem
 import com.kazumaproject.custom_keyboard.data.KeyTextInputBehavior
+import com.kazumaproject.custom_keyboard.data.QwertyKeyConfig
+import com.kazumaproject.custom_keyboard.data.QwertyKeyLayer
+import com.kazumaproject.custom_keyboard.data.QwertyKeyConfigCodec
 import com.kazumaproject.custom_keyboard.data.KeyType
 import com.kazumaproject.custom_keyboard.data.SpecialKeyColorStyle
 import com.kazumaproject.custom_keyboard.data.automaticDoubleTapPolicy
@@ -103,7 +108,13 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private var _binding: FragmentKeyEditorBinding? = null
     private val binding get() = _binding!!
 
+    private var freeFlickDraft: PopupKeyConfig? = null
+    private var restoredInputStyleId: Int? = null
     private var currentKeyData: KeyData? = null
+    private var qwertyDraftInitialized = false
+    private var editingKeyIdentifier: String? = null
+    private var restoredEditingKeyIdentifier: String? = null
+    private var savedQwertyDraft: QwertyKeyConfig? = null
 
     private var currentFlickItems = mutableListOf<FlickMappingItem>()
     private var currentToggleFlickItems = mutableListOf<FlickMappingItem>()
@@ -177,6 +188,19 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         _binding = FragmentKeyEditorBinding.bind(view)
 
         binding.buttonDone.isEnabled = false
+        restoredEditingKeyIdentifier = savedInstanceState?.getString("qwertyEditingKey")
+        savedQwertyDraft = QwertyKeyConfigCodec.decode(savedInstanceState?.getString("qwertyDraft"), requireOutput = false)
+        binding.qwertyKeyEditor.onChanged = { updateDoneButtonState() }
+        freeFlickDraft = PopupKeyConfigCodec.decode(savedInstanceState?.getString("freeFlickDraft")) ?: freeFlickDraft
+        restoredInputStyleId = savedInstanceState?.getInt("freeFlickInputStyle")?.takeIf { it != View.NO_ID }
+        childFragmentManager.setFragmentResultListener(CustomFreeFlickEditorDialog.RESULT, viewLifecycleOwner) { _, result ->
+            freeFlickDraft = PopupKeyConfigCodec.decode(result.getString(CustomFreeFlickEditorDialog.ARG_CONFIG))
+            updateDoneButtonState()
+        }
+        binding.editFreeFlickMap.setOnClickListener {
+            val config = ensureFreeFlickDraft() ?: return@setOnClickListener
+            CustomFreeFlickEditorDialog.create(PopupKeyConfigCodec.encode(config), binding.keyLabelEdittext.text.toString()).show(childFragmentManager, "freeFlickEditor")
+        }
         setupToolbarAndMenu()
         setupGridEditor()
         setupUIListeners()
@@ -338,6 +362,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             binding.outputModeChipGroup.isVisible = !isSpecialKey
 
             if (isSpecialKey) {
+                binding.editFreeFlickMap.isVisible = false
                 // Default category = single if none selected yet
                 if (binding.specialCategoryChipGroup.checkedChipId == View.NO_ID) {
                     binding.specialCategoryChipGroup.check(R.id.chip_special_single)
@@ -562,6 +587,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     }
 
     private fun handleSpecialCategoryUi() {
+        binding.qwertyKeyEditor.isVisible = false
         val isFlick = binding.specialCategoryChipGroup.checkedChipId == R.id.chip_special_flick
 
         binding.keyLabelLayout.isVisible = false
@@ -591,8 +617,61 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         }
     }
 
+    private fun ensureFreeFlickDraft(): PopupKeyConfig? {
+        val key = currentKeyData ?: return null
+        if (freeFlickDraft == null) {
+            val tap = currentFlickItems.firstOrNull { it.direction == FlickDirection.TAP }?.output
+                ?.takeIf { it.isNotEmpty() } ?: textOutputFromAction(key.action).ifEmpty { key.label }
+            freeFlickDraft = key.popupMapConfig ?: PopupKeyConfigCodec.create(key.keyId ?: return null, tap)
+        }
+        return freeFlickDraft
+    }
+
     private fun handleInputStyleUi() {
         val selectedStyle = binding.inputStyleChipGroup.checkedChipId
+        val isFreeFlick = selectedStyle == R.id.chip_free_flick
+        binding.editFreeFlickMap.isVisible = isFreeFlick
+        if (isFreeFlick) {
+            ensureFreeFlickDraft()
+            binding.qwertyKeyEditor.isVisible = false
+            binding.keyLabelLayout.isVisible = true
+            binding.flickGridEditorView.isVisible = false
+            binding.circularFlickEditorGroup.isVisible = false
+            binding.specialFlickEditorGroup.isVisible = false
+            binding.textSelectedDirection.isVisible = false
+            binding.textCharInputLayout.isVisible = false
+            binding.textOutputModeTitle.isVisible = false
+            binding.outputModeChipGroup.isVisible = false
+            binding.customKeyboardTargetLayout.isVisible = false
+            currentCellMode = null
+            updateIconOverrideVisibility()
+            return
+        }
+        val isQwerty = selectedStyle == R.id.chip_qwerty
+        binding.qwertyKeyEditor.isVisible = isQwerty
+        if (isQwerty) {
+            binding.keyLabelLayout.isVisible = false
+            binding.flickGridEditorView.isVisible = false
+            binding.circularFlickEditorGroup.isVisible = false
+            binding.specialFlickEditorGroup.isVisible = false
+            binding.textSelectedDirection.isVisible = false
+            binding.textCharInputLayout.isVisible = false
+            binding.textOutputModeTitle.isVisible = false
+            binding.outputModeChipGroup.isVisible = false
+            binding.customKeyboardTargetLayout.isVisible = false
+            currentCellMode = null
+            if (!qwertyDraftInitialized) {
+                qwertyDraftInitialized = true
+                val key = currentKeyData
+                binding.qwertyKeyEditor.setConfig(savedQwertyDraft ?: key?.qwertyConfig ?: QwertyKeyConfig(
+                    QwertyKeyLayer(output = textOutputFromAction(key?.action)
+                        .ifEmpty { key?.label.orEmpty() }, label = key?.label.orEmpty())
+                ))
+            }
+            updateIconOverrideVisibility()
+            return
+        }
+
         val isTwoStep = selectedStyle == R.id.chip_two_step_flick
         val isCircular = selectedStyle == R.id.chip_circular_flick
         val isFlickLongPress = selectedStyle == R.id.chip_flick_long_press
@@ -602,6 +681,8 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             binding.outputModeChipGroup.check(R.id.chip_normal_output)
         }
 
+        binding.textOutputModeTitle.isVisible = true
+        binding.outputModeChipGroup.isVisible = true
         binding.keyLabelLayout.isVisible = true
         binding.customKeyboardTargetLayout.isVisible = false
         binding.flickGridEditorView.isVisible = true
@@ -1099,6 +1180,19 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         if (outputEditMode != OutputEditMode.TOGGLE) {
             binding.textCharInputLayout.error = null
         }
+        if (binding.keyTypeChipGroup.checkedChipId == R.id.chip_normal &&
+            binding.inputStyleChipGroup.checkedChipId == R.id.chip_free_flick) {
+            binding.buttonDone.isEnabled = ensureFreeFlickDraft()?.let { config ->
+                com.kazumaproject.custom_keyboard.data.PopupMapValidator.conflicts(config).isEmpty() &&
+                    config.maps.any { map -> map.tapText.isNotEmpty() || map.regions.any { it.action.text.isNotEmpty() } }
+            } == true
+            return
+        }
+        if (binding.keyTypeChipGroup.checkedChipId == R.id.chip_normal &&
+            binding.inputStyleChipGroup.checkedChipId == R.id.chip_qwerty) {
+            binding.buttonDone.isEnabled = binding.qwertyKeyEditor.isInputValid
+            return
+        }
         val isEnabled = when (binding.keyTypeChipGroup.checkedChipId) {
             R.id.chip_special -> {
                 val isFlick =
@@ -1192,7 +1286,8 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             // legacy KeyData.keyId. selectedKeyIdentifier carries item.id for
             // flexible layouts (so half-cell keys and editor-created keys
             // resolve correctly even when keyData.keyId is null/blank).
-            val selectedId = state.selectedKeyIdentifier
+            val selectedId = state.selectedKeyIdentifier ?: restoredEditingKeyIdentifier.takeIf { savedQwertyDraft != null || freeFlickDraft != null }
+            editingKeyIdentifier = selectedId
             val selectedKeyItem = selectedId?.let { id ->
                 state.layout.items
                     .filterIsInstance<KeyItem>()
@@ -1307,8 +1402,15 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 binding.outputModeChipGroup.check(R.id.chip_normal_output)
                 outputEditMode = OutputEditMode.NORMAL
 
-                // Input style: petal or two-step
-                if (key.keyType == KeyType.TWO_STEP_FLICK) {
+                // Restore the supported editor.
+                if (freeFlickDraft != null && restoredInputStyleId != null) {
+                    binding.inputStyleChipGroup.check(restoredInputStyleId!!)
+                } else if (key.keyType == KeyType.FREE_FLICK) {
+                    freeFlickDraft = freeFlickDraft ?: key.popupMapConfig
+                    binding.inputStyleChipGroup.check(R.id.chip_free_flick)
+                } else if (key.keyType == KeyType.QWERTY || savedQwertyDraft != null) {
+                    binding.inputStyleChipGroup.check(R.id.chip_qwerty)
+                } else if (key.keyType == KeyType.TWO_STEP_FLICK) {
                     binding.inputStyleChipGroup.check(R.id.chip_two_step_flick)
                 } else if (key.keyType == KeyType.FLICK_LONG_PRESS) {
                     binding.inputStyleChipGroup.check(R.id.chip_flick_long_press)
@@ -1788,6 +1890,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             return
         }
 
+        var newQwertyConfig: QwertyKeyConfig? = null
         val newLabel: String
         val newKeyType: KeyType
         val isSpecial: Boolean
@@ -1912,7 +2015,23 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 val isFlickLongPress =
                     binding.inputStyleChipGroup.checkedChipId == R.id.chip_flick_long_press
 
-                if (isCircular) {
+                if (binding.inputStyleChipGroup.checkedChipId == R.id.chip_free_flick) {
+                    val config = ensureFreeFlickDraft() ?: return
+                    if (!binding.buttonDone.isEnabled) return
+                    newKeyType = KeyType.FREE_FLICK
+                    newLabel = binding.keyLabelEdittext.text.toString().ifEmpty { config.map(config.startMapId)!!.tapText }
+                    newAction = KeyAction.Text(config.map(config.startMapId)!!.tapText)
+                    newLongPressFlickMap = emptyMap()
+                    newTwoStepLongPressMap = emptyMap()
+                } else if (binding.inputStyleChipGroup.checkedChipId == R.id.chip_qwerty) {
+                    if (!binding.qwertyKeyEditor.isInputValid) return
+                    newQwertyConfig = binding.qwertyKeyEditor.config
+                    newKeyType = KeyType.QWERTY
+                    newLabel = newQwertyConfig.normal.displayLabel
+                    newAction = KeyAction.Text(newQwertyConfig.normal.output)
+                    newLongPressFlickMap = emptyMap()
+                    newTwoStepLongPressMap = emptyMap()
+                } else if (isCircular) {
                     newKeyType = KeyType.CIRCULAR_FLICK
                     newLabel = binding.keyLabelEdittext.text.toString()
                     val tapOutput = currentCircularFlickMaps
@@ -2065,7 +2184,9 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             isSpecialKey = isSpecial,
             action = newAction,
             // IMPORTANT: special flick should still be flickable (KeyType != NORMAL)
-            isFlickable = (newKeyType != KeyType.NORMAL),
+            isFlickable = newKeyType !in setOf(KeyType.NORMAL, KeyType.QWERTY),
+            qwertyConfig = newQwertyConfig,
+            popupMapConfig = freeFlickDraft?.takeIf { newKeyType == KeyType.FREE_FLICK },
             drawableResId = newDrawableResId,
             icon = savedIconRef,
             rowSpan = if (isFlexibleSizeEditing) {
@@ -2123,6 +2244,21 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         }
     }
 
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        freeFlickDraft?.let { outState.putString("freeFlickDraft", PopupKeyConfigCodec.encode(it)) }
+        if (_binding != null && freeFlickDraft != null) {
+            outState.putString("qwertyEditingKey", editingKeyIdentifier)
+            outState.putInt("freeFlickInputStyle", binding.inputStyleChipGroup.checkedChipId)
+        }
+        if (_binding != null && binding.keyTypeChipGroup.checkedChipId == R.id.chip_normal &&
+            binding.inputStyleChipGroup.checkedChipId == R.id.chip_qwerty) {
+            outState.putString("qwertyDraft", QwertyKeyConfigCodec.encode(binding.qwertyKeyEditor.config))
+            outState.putString("qwertyEditingKey", editingKeyIdentifier)
+        }
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         if (!didSaveKey) {
@@ -2131,6 +2267,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         }
         viewModel.doneNavigatingToKeyEditor()
 
+        qwertyDraftInitialized = false
         _binding = null
     }
 }

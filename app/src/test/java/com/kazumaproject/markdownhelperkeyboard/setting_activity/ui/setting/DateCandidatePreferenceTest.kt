@@ -78,11 +78,12 @@ class DateCandidatePreferenceTest {
         val results = SettingSearchIndex.searchable(context)
             .filter { it.key == "date_candidate_settings_preference" }
         assertEquals(
-            setOf(SettingCategory.CANDIDATE_CONVERSION, SettingCategory.CONVERSION_ENGINE),
+            setOf(SettingCategory.CONVERSION_ENGINE),
             results.map { it.category }.toSet(),
         )
         results.forEach { result ->
-            assertEquals(R.id.dateCandidateSettingsFragment, SettingDestinations.destinationId(result.destination))
+            assertEquals(R.id.conversionEnginePreferenceFragment, SettingDestinations.destinationId(result.destination))
+            assertEquals("date_candidate_settings_preference", SettingDestinations.highlightPreferenceKey(result.destination))
         }
 
         val legacyResult = SettingSearchIndex.legacySearchable(context)
