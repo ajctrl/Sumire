@@ -200,18 +200,23 @@ class RepairIntegrationTests(unittest.TestCase):
         self.assertIn("protected path", reason)
         self.assertIn("/actions/runs/20", reason)
 
-    def test_two_repairs_then_handoff_and_repeated_event_does_not_call_codex(self):
+    def test_more_than_two_repairs_continue_but_repeated_candidate_is_handed_off(self):
         self.candidate()
-        for count in (1, 2):
+        for count in range(1, 6):
             self.resume({"fork.txt": {"text": f"fix {count}\n", "executable": False}})
             self.head = self.git("rev-parse", "HEAD")
             self.plan["head"] = self.head
             self.pull["head"]["sha"] = self.head
             self.git("switch", "dev")
-        calls = self.resume()
-        calls.assert_not_called()
+            self.record_review.assert_not_called()
+        self.assertEqual(repair.candidate_depth(sync, self.base, self.target, self.head, self.next_state), 5)
+        calls = self.resume({"fork.txt": {"text": "fix 1\n", "executable": False}})
+        calls.assert_called_once()
         self.record_review.assert_called_once()
-        self.assertIn("after 2 repairs", self.record_review.call_args.args[4])
+        self.assertIn("previous candidate tree", self.record_review.call_args.args[4])
+        self.assertEqual(self.git("ls-remote", "origin", f"refs/heads/{self.branch}").split()[0], self.head)
+        self.git("reset", "--hard", self.head)
+        self.git("switch", "dev")
         self.pending_review.return_value = {"html_url": "review-url", "body": "review pending"}
         calls = self.resume()
         calls.assert_not_called()

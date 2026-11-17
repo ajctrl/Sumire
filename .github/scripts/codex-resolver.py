@@ -19,7 +19,7 @@ spec.loader.exec_module(transport)
 policy = transport.policy
 BudgetPaused = transport.BudgetPaused
 # Invalidate candidates/results produced by the previous one-shot resolver.
-policy.VERSION = "codex-validation-repair-v4"
+policy.VERSION = "codex-validation-budget-v5"
 spec = importlib.util.spec_from_file_location("codex_edits", Path(__file__).with_name("codex-edits.py"))
 edits = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(edits)

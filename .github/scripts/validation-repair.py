@@ -1,4 +1,4 @@
-"""Resume a failed validation in a fresh, bounded preparation run.
+"""Resume a failed validation in a fresh, daily-budgeted preparation run.
 
 Only the trusted preparation artifact identifies the candidate. Validation logs
 are untrusted diagnostic text, never instructions, executable code or a plan.
@@ -12,7 +12,6 @@ import re
 import subprocess
 import zipfile
 
-MAX_REPAIRS = 2
 TITLE = re.compile(r"Validate upstream ([1-9][0-9]*):([1-9][0-9]*)$")
 spec = importlib.util.spec_from_file_location("repair_plan", Path(__file__).with_name("sync-plan.py"))
 plans = importlib.util.module_from_spec(spec)
@@ -98,9 +97,14 @@ def failure(repo, run_id):
 
 
 def candidate_depth(sync, base, upstream, head, next_state):
-    """Accept the original merge and at most MAX_REPAIRS verified linear repairs."""
-    current = head
-    for depth in range(MAX_REPAIRS + 1):
+    """Verify every repair back to the original merge, rejecting repeated trees."""
+    current, depth = head, 0
+    seen = set()
+    while True:
+        tree = sync.git("rev-parse", current + "^{tree}")
+        if tree in seen:
+            raise sync.conflict_resolver.policy.ReviewRequired("Validation repairs repeat a previous candidate tree")
+        seen.add(tree)
         message = sync.git("show", "-s", "--format=%B", current).splitlines()
         if (f"Sumire-Sync-Tree: {sync.git('rev-parse', current + '^{tree}')}" not in message
                 or f"Sumire-Conflict-Policy: {sync.conflict_resolver.policy.VERSION}" not in message
@@ -113,7 +117,8 @@ def candidate_depth(sync, base, upstream, head, next_state):
         if len(parents) != 1 or f"Sumire-Repair-Parent: {parents[0]}" not in message:
             break
         current = parents[0]
-    raise sync.conflict_resolver.policy.ReviewRequired("Invalid or excessive validation repair history")
+        depth += 1
+    raise sync.conflict_resolver.policy.ReviewRequired("Invalid validation repair history")
 
 
 def pending_key(base, head):
@@ -164,9 +169,6 @@ def resume(sync, run_id, context):
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "validation-failure.json").write_text(json.dumps(
         {"run": url, "plan": plan, "failures": evidence}, ensure_ascii=False, indent=2))
-    if depth >= MAX_REPAIRS:
-        raise sync.conflict_resolver.policy.ReviewRequired(
-            f"Validation still fails after {MAX_REPAIRS} repairs. Candidate: {head}. Logs: {url}")
     resolver = sync.conflict_resolver.Resolver(task=f"{repo}:{base}:{upstream}:validation:{head}")
     key = pending_key(base, head)
     resolver.state.remember(key, resolver.task, failed_run=str(run_id))
@@ -193,11 +195,14 @@ def resume(sync, run_id, context):
         if sync.release_versions.version_info(Path(sync.VERSION_FILE).read_text()) != sync.release_versions.version_info(
                 sync.git("show", f"{head}:{sync.VERSION_FILE}")):
             raise sync.conflict_resolver.policy.ReviewRequired("Validation repair changed release version numbers")
+        previous_trees = set(sync.git("log", "--first-parent", "--format=%T", f"{base}..{head}").splitlines())
+        if sync.git("write-tree") in previous_trees:
+            raise sync.conflict_resolver.policy.ReviewRequired("Repair repeats a previous candidate tree")
         sync.run("python3", ".github/scripts/check-fork-invariants.py")
         resolver.assess_update(sync.git("diff", "--no-ext-diff", base, "--"))
         sync.git("config", "user.name", "github-actions[bot]")
         sync.git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-        sync.git("commit", "-m", f"Repair upstream {tag} validation ({depth + 1}/{MAX_REPAIRS})", "-m",
+        sync.git("commit", "-m", f"Repair upstream {tag} validation (repair {depth + 1})", "-m",
                  f"Sumire-Sync-Tree: {sync.git('write-tree')}\n"
                  f"Sumire-Conflict-Policy: {sync.conflict_resolver.policy.VERSION}\n"
                  f"Sumire-Repair-Parent: {head}\nValidation-Run: {url}")
