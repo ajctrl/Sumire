@@ -56,6 +56,11 @@ jobs:
       - name: Run Android Lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: ./gradlew :app:lint${{ matrix.edition }}StandardDebug --stacktrace --no-daemon --max-workers=2
+      - name: Build optimized ${{ matrix.edition }} Release without signing
+        run: ./gradlew :app:assemble${{ matrix.edition }}StandardReleaseUnsigned --stacktrace --no-daemon --max-workers=1
+      - name: Build optimized F-Droid Release without signing
+        if: matrix.edition == 'Lite'
+        run: ./gradlew :app:assembleLiteFdroidReleaseUnsigned --stacktrace --no-daemon --max-workers=1
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4

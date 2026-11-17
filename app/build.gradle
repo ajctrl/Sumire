@@ -69,8 +69,8 @@ android {
         applicationId "com.example.sumire"
         minSdk 24
         targetSdk 37
-        versionCode 873
-        versionName "1.7.160"
+        versionCode 874
+        versionName "1.7.160.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "SUMIRE_SYNC_PACKAGE_ID", "\"${sumireSyncPackageId}\""
     }
