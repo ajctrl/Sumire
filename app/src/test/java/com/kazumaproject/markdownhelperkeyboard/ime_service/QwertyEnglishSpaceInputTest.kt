@@ -51,7 +51,7 @@ class QwertyEnglishSpaceInputTest {
         val editor = Editor()
         editor.setComposingText(left + tail, 1)
         AppPreference.init(ApplicationProvider.getApplicationContext())
-        val service = spy(IMEService())
+        val service = spy(IMEService().apply { zenzRuntimeClient = org.mockito.kotlin.mock() })
         service.appPreference = AppPreference
         ReflectionHelpers.setField(service, "listAdapter", mock(FloatingCandidateListAdapter::class.java))
         doReturn(editor).`when`(service).getCurrentInputConnection()

@@ -1,7 +1,6 @@
 package com.kazumaproject.custom_keyboard.layout
 
 import com.kazumaproject.custom_keyboard.data.KeyboardLayout
-import com.kazumaproject.custom_keyboard.data.TfbiFlickNode
 import com.kazumaproject.custom_keyboard.data.TfbiFlickRotation
 import com.kazumaproject.custom_keyboard.view.TfbiFlickDirection
 
@@ -19,13 +18,6 @@ internal object SumireFlickRotationMapper {
                 if (label !in diacriticLabels) firstMap else firstMap.mapValues { (first, secondMap) ->
                     if (shouldSwap(first, rotation)) swapMap(secondMap, first) else secondMap
                 }
-            },
-            hierarchicalFlickMaps = layout.hierarchicalFlickMaps.mapValues { (label, key) ->
-                if (label !in diacriticLabels) key else key.copy(
-                    normalMap = swapRootMap(key.normalMap, rotation),
-                    dakutenMap = key.dakutenMap?.let { swapRootMap(it, rotation) },
-                    handakutenMap = key.handakutenMap?.let { swapRootMap(it, rotation) }
-                )
             }
         )
     }
@@ -38,36 +30,9 @@ internal object SumireFlickRotationMapper {
             TfbiFlickRotation.COUNTERCLOCKWISE -> first == TfbiFlickDirection.RIGHT
         }
 
-    private fun swapRootMap(
-        map: Map<TfbiFlickDirection, TfbiFlickNode>,
-        rotation: TfbiFlickRotation
-    ): Map<TfbiFlickDirection, TfbiFlickNode> = map.mapValues { (first, node) ->
-        if (shouldSwap(first, rotation) && node is TfbiFlickNode.SubMenu) {
-            // This submenu's continuation metadata refers to the unchanged root map.
-            node.copy(nextMap = swapStage(node.nextMap, first))
-        } else {
-            node
-        }
-    }
 
-    private fun swapStage(
-        map: Map<TfbiFlickDirection, TfbiFlickNode>,
-        first: TfbiFlickDirection
-    ): Map<TfbiFlickDirection, TfbiFlickNode> = map.entries.associate { (direction, node) ->
-        val newDirection = swapDiagonal(direction, first)
-        newDirection to if (node is TfbiFlickNode.SubMenu) {
-            node.copy(
-                // The entry direction is also the selected default in these child stages.
-                // Relocate that entry along with its submenu, while keeping cardinal long
-                // vowel directions intact. Swapping both slots avoids losing a collision.
-                nextMap = if (direction != newDirection) swapStage(node.nextMap, first) else node.nextMap,
-                parentContinuationDirections = node.parentContinuationDirections
-                    .mapTo(linkedSetOf()) { swapDiagonal(it, first) }
-            )
-        } else {
-            node
-        }
-    }
+
+
 
     private fun <T> swapMap(
         map: Map<TfbiFlickDirection, T>,

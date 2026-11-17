@@ -47,6 +47,7 @@ class CustomDirectInputTransitionTest {
     // Initialize the original receiver captured by lazy delegates before Mockito copies it.
     private val service = spy(IMEService().apply {
         appPreference = AppPreference
+        zenzRuntimeClient = org.mockito.kotlin.mock()
         ReflectionHelpers.setField(this, "runtimeInputSharedPreferences",
             PreferenceManager.getDefaultSharedPreferences(
                 ApplicationProvider.getApplicationContext<Context>()))

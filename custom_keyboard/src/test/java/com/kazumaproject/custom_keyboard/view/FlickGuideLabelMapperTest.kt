@@ -1,6 +1,5 @@
 package com.kazumaproject.custom_keyboard.view
 
-import com.kazumaproject.custom_keyboard.data.TfbiFlickNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -59,24 +58,5 @@ class FlickGuideLabelMapperTest {
         assertEquals("", labels.upLeft)
     }
 
-    @Test
-    fun buildHierarchicalGuideLabels_usesRootNodeDisplayText() {
-        val normalMap = mapOf(
-            TfbiFlickDirection.TAP to TfbiFlickNode.Input("か"),
-            TfbiFlickDirection.LEFT to TfbiFlickNode.Input("き"),
-            TfbiFlickDirection.UP to TfbiFlickNode.Input("く"),
-            TfbiFlickDirection.UP_RIGHT to TfbiFlickNode.Input("が"),
-            TfbiFlickDirection.RIGHT to TfbiFlickNode.Input("け"),
-            TfbiFlickDirection.DOWN to TfbiFlickNode.Input("こ")
-        )
 
-        val labels = FlickGuideLabelMapper.buildHierarchicalGuideLabels(normalMap, 1)
-
-        assertEquals("か", labels.tap)
-        assertEquals("き", labels.left)
-        assertEquals("く", labels.up)
-        assertEquals("が", labels.upRight)
-        assertEquals("け", labels.right)
-        assertEquals("こ", labels.down)
-    }
 }

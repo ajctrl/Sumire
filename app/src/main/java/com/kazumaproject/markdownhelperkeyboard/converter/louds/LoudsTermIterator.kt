@@ -10,10 +10,13 @@ internal class LoudsTermIterator(
     private val labelCount: Int,
     private val labelAt: (Int) -> Char,
     private val termAt: (Int) -> Int,
+    startNode: Int = 0,
+    prefix: String = "",
+    private val includeChild: ((labelIndex: Int) -> Boolean)? = null,
 ) : Iterator<Pair<String, Int>> {
     private data class Frame(val node: Int, var child: Int = -1, var visited: Boolean = false)
-    private val stack = ArrayDeque<Frame>().apply { addLast(Frame(0)) }
-    private val reading = StringBuilder()
+    private val stack = ArrayDeque<Frame>().apply { addLast(Frame(startNode)) }
+    private val reading = StringBuilder(prefix)
     private var pending: Pair<String, Int>? = null
 
     override fun hasNext(): Boolean {
@@ -22,7 +25,7 @@ internal class LoudsTermIterator(
             val frame = stack.last()
             if (!frame.visited) {
                 frame.visited = true
-                frame.child = lbs.select0(lbs.rank1(frame.node)) + 1
+                frame.child = loudsChildPosition(bits, frame.node, lbs.select0(lbs.rank1(frame.node)))
                 val term = termAt(frame.node)
                 if (term >= 0) {
                     pending = reading.toString() to term
@@ -33,6 +36,7 @@ internal class LoudsTermIterator(
             val label = if (child >= 0 && bits[child]) lbs.rank1(child) else labelCount
             if (label < labelCount) {
                 frame.child++
+                if (includeChild?.invoke(label) == false) continue
                 reading.append(labelAt(label))
                 stack.addLast(Frame(child))
             } else {

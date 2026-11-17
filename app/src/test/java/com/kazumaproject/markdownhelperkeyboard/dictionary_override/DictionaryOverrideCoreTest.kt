@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
 import com.google.gson.Gson
+import com.kazumaproject.dictionary.TokenArray
 import com.kazumaproject.markdownhelperkeyboard.converter.ConnectionMatrix
 import com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.external_dictionary.CORE_REPLACEMENT_CATEGORIES
 import com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.external_dictionary.COMMON_REPLACEMENT_KEYS
@@ -217,13 +218,13 @@ class DictionaryOverrideCoreTest {
         val store = alwaysValidStore("revision-optional-enabled")
         val before = store.currentRevision
 
-        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON, true)
+        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, true)
         assertEquals(before + 1L, store.currentRevision)
 
-        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON, true)
+        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, true)
         assertEquals(before + 1L, store.currentRevision)
 
-        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON, false)
+        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, false)
         assertEquals(before + 2L, store.currentRevision)
     }
 
@@ -250,13 +251,13 @@ class DictionaryOverrideCoreTest {
     @Test
     fun revision_tripleDictionaryFinalSaveAutoEnableUsesSingleIncrementForThatSave() {
         val store = alwaysValidStore("revision-triple")
-        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON, true)
+        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, true)
         val afterOptional = store.currentRevision
 
-        saveTripleOverrides(store, DictionaryCategory.CLASSIFIED_PERSON)
+        saveTripleOverrides(store, DictionaryCategory.CLASSIFIED_PERSON_ACTOR)
 
         assertEquals(afterOptional + 3L, store.currentRevision)
-        assertTrue(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_PERSON))
+        assertTrue(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_PERSON_ACTOR))
     }
 
     @Test
@@ -522,7 +523,7 @@ class DictionaryOverrideCoreTest {
         )
         val resolver = sourceResolver(store)
 
-        listOf(DictionaryCategory.CLASSIFIED_PERSON, DictionaryCategory.READING_CORRECTION).forEach { category ->
+        listOf(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, DictionaryCategory.READING_CORRECTION).forEach { category ->
             store.setOptionalBundledEnabled(category, true)
             assertEquals(DictionaryCategoryLoadState.Bundled, resolver.resolveCategoryLoadState(category))
         }
@@ -537,7 +538,7 @@ class DictionaryOverrideCoreTest {
         )
         val resolver = sourceResolver(store)
 
-        listOf(DictionaryCategory.CLASSIFIED_PERSON, DictionaryCategory.READING_CORRECTION).forEach { category ->
+        listOf(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, DictionaryCategory.READING_CORRECTION).forEach { category ->
             store.setOptionalBundledEnabled(category, false)
             assertEquals(DictionaryCategoryLoadState.Disabled, resolver.resolveCategoryLoadState(category))
         }
@@ -560,21 +561,21 @@ class DictionaryOverrideCoreTest {
     @Test
     fun store_doesNotAutoEnableExternalForDisabledDisableableDictionaryAfterAllImports() {
         val store = alwaysValidStore("import-disabled")
-        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON, false)
+        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, false)
 
-        saveTripleOverrides(store, DictionaryCategory.CLASSIFIED_PERSON)
+        saveTripleOverrides(store, DictionaryCategory.CLASSIFIED_PERSON_ACTOR)
 
-        assertFalse(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_PERSON))
+        assertFalse(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_PERSON_ACTOR))
     }
 
     @Test
     fun store_autoEnablesExternalForEnabledDisableableDictionaryAfterAllImports() {
         val store = alwaysValidStore("import-enabled")
-        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON, true)
+        store.setOptionalBundledEnabled(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, true)
 
-        saveTripleOverrides(store, DictionaryCategory.CLASSIFIED_PERSON)
+        saveTripleOverrides(store, DictionaryCategory.CLASSIFIED_PERSON_ACTOR)
 
-        assertTrue(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_PERSON))
+        assertTrue(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_PERSON_ACTOR))
     }
 
     @Test
@@ -586,7 +587,7 @@ class DictionaryOverrideCoreTest {
         )
         val resolver = ExternalDictionaryDisplayStateResolver(store)
 
-        listOf(DictionaryCategory.CLASSIFIED_PERSON, DictionaryCategory.READING_CORRECTION).forEach { category ->
+        listOf(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, DictionaryCategory.READING_CORRECTION).forEach { category ->
             val state = resolver.resolveDisableableCategoryDisplayState(category)
             assertTrue(state.switchEnabled)
         }
@@ -642,6 +643,27 @@ class DictionaryOverrideCoreTest {
 
         assertFalse(result.isCompatible)
         assertTrue(result.problems().any { it.affectedFileKey == DictionaryFileKey.SYSTEM_TOKEN })
+    }
+
+    @Test
+    fun compatibility_checksBundledSystemTokensWithoutTheSerializedAsset() {
+        val tokens = TokenArray()
+        DictionaryBinaryReader.openZipAwareObject(
+            ByteArrayInputStream(tokenBytes(shortArrayOf(0, 2))),
+            DictionaryFileKey.SYSTEM_TOKEN.name,
+        ).use { tokens.readExternal(it) }
+        val files = mapOf(
+            DictionaryFileKey.POS_TABLE to posTableBytes(shortArrayOf(0, 1), shortArrayOf(0, 1)),
+            DictionaryFileKey.CONNECTION_ID to validConnectionIds(),
+        )
+
+        val result = DictionaryCompatibilityValidator.validateSources(
+            tokenCategories = listOf(DictionaryCategory.SYSTEM),
+            sourceOpener = { key -> ByteArrayInputStream(files.getValue(key)) },
+            bundledSystemTokens = { tokens },
+        )
+
+        assertEquals(listOf(DictionaryFileKey.SYSTEM_TOKEN), result.problems().map { it.affectedFileKey })
     }
 
     @Test
@@ -822,9 +844,9 @@ class DictionaryOverrideCoreTest {
         assertEquals(DictionaryFileKey.SYSTEM_TANGO, DictionaryZipEntryNameMapper.map("tango.dat"))
         assertEquals(DictionaryFileKey.SYSTEM_YOMI, DictionaryZipEntryNameMapper.map("yomi.dat"))
         assertEquals(DictionaryFileKey.SYSTEM_TOKEN, DictionaryZipEntryNameMapper.map("token.dat"))
-        assertEquals(DictionaryFileKey.CLASSIFIED_TERM_TANGO, DictionaryZipEntryNameMapper.map("categories/term/tango.dat.zip"))
-        assertEquals(DictionaryFileKey.CLASSIFIED_TERM_YOMI, DictionaryZipEntryNameMapper.map("categories/term/yomi.dat.zip"))
-        assertEquals(DictionaryFileKey.CLASSIFIED_TERM_TOKEN, DictionaryZipEntryNameMapper.map("categories/term/token.dat.zip"))
+        assertEquals(DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_TANGO, DictionaryZipEntryNameMapper.map("categories/term/general/food_drink_cooking/tango.dat.zip"))
+        assertEquals(DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_YOMI, DictionaryZipEntryNameMapper.map("categories/term/general/food_drink_cooking/yomi.dat.zip"))
+        assertEquals(DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_TOKEN, DictionaryZipEntryNameMapper.map("categories/term/general/food_drink_cooking/token.dat.zip"))
         assertEquals(DictionaryFileKey.CLASSIFIED_PLACE_TANGO, DictionaryZipEntryNameMapper.map("categories/place/tango.dat.zip"))
         assertEquals(DictionaryFileKey.CLASSIFIED_PLACE_YOMI, DictionaryZipEntryNameMapper.map("categories/place/yomi.dat.zip"))
         assertEquals(DictionaryFileKey.CLASSIFIED_PLACE_TOKEN, DictionaryZipEntryNameMapper.map("categories/place/token.dat.zip"))
@@ -861,18 +883,18 @@ class DictionaryOverrideCoreTest {
 
     @Test
     fun zipEntryPlanner_partialDictionaryRecognizesSingleEntryWithoutAutoEnablingCategory() {
-        val plan = DictionaryZipEntryPlanner.plan(listOf("categories/term/tango.dat.zip"))
+        val plan = DictionaryZipEntryPlanner.plan(listOf("categories/term/general/food_drink_cooking/tango.dat.zip"))
         val store = alwaysValidStore("zip-partial-neologd")
 
         val result = store.saveOverrideFromZipEntryInputStream(
-            DictionaryFileKey.CLASSIFIED_TERM_TANGO,
+            DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_TANGO,
             ByteArrayInputStream(byteArrayOf(1, 2, 3)),
-            "categories/term/tango.dat.zip",
+            "categories/term/general/food_drink_cooking/tango.dat.zip",
         )
 
         assertTrue(result.isValid)
-        assertEquals(listOf(DictionaryFileKey.CLASSIFIED_TERM_TANGO), plan.importableEntries.map { it.key })
-        assertFalse(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_TERM))
+        assertEquals(listOf(DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_TANGO), plan.importableEntries.map { it.key })
+        assertFalse(store.isExternalEnabledForCategory(DictionaryCategory.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING))
     }
 
     @Test
@@ -944,9 +966,9 @@ class DictionaryOverrideCoreTest {
                 "categories/place/token.dat.zip",
                 "categories/place/yomi.dat.zip",
                 "categories/place/tango.dat.zip",
-                "categories/person/tango.dat.zip",
-                "categories/person/token.dat.zip",
-                "categories/person/yomi.dat.zip",
+                "categories/person/actor/tango.dat.zip",
+                "categories/person/actor/token.dat.zip",
+                "categories/person/actor/yomi.dat.zip",
             )
         )
 
@@ -955,9 +977,9 @@ class DictionaryOverrideCoreTest {
                 DictionaryFileKey.CLASSIFIED_PLACE_TOKEN,
                 DictionaryFileKey.CLASSIFIED_PLACE_YOMI,
                 DictionaryFileKey.CLASSIFIED_PLACE_TANGO,
-                DictionaryFileKey.CLASSIFIED_PERSON_TANGO,
-                DictionaryFileKey.CLASSIFIED_PERSON_TOKEN,
-                DictionaryFileKey.CLASSIFIED_PERSON_YOMI,
+                DictionaryFileKey.CLASSIFIED_PERSON_ACTOR_TANGO,
+                DictionaryFileKey.CLASSIFIED_PERSON_ACTOR_TOKEN,
+                DictionaryFileKey.CLASSIFIED_PERSON_ACTOR_YOMI,
             ),
             plan.importableEntries.map { it.key }.toSet(),
         )
@@ -966,14 +988,14 @@ class DictionaryOverrideCoreTest {
     @Test
     fun zipEntryPlanner_neologdBundleMapsNeologdTriple() {
         val plan = DictionaryZipEntryPlanner.plan(
-            listOf("categories/term/token.dat.zip", "categories/term/yomi.dat.zip", "categories/term/tango.dat.zip")
+            listOf("categories/term/general/food_drink_cooking/token.dat.zip", "categories/term/general/food_drink_cooking/yomi.dat.zip", "categories/term/general/food_drink_cooking/tango.dat.zip")
         )
 
         assertEquals(
             setOf(
-                DictionaryFileKey.CLASSIFIED_TERM_TOKEN,
-                DictionaryFileKey.CLASSIFIED_TERM_YOMI,
-                DictionaryFileKey.CLASSIFIED_TERM_TANGO,
+                DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_TOKEN,
+                DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_YOMI,
+                DictionaryFileKey.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING_TANGO,
             ),
             plan.importableEntries.map { it.key }.toSet(),
         )

@@ -32,6 +32,11 @@ import androidx.core.widget.ImageViewCompat
 import com.google.android.material.textview.MaterialTextView
 import com.kazumaproject.core.domain.skin.KeyboardSkinId
 import com.kazumaproject.core.ui.skin.KeyboardSkinRegistry
+import com.kazumaproject.core.ui.geometry.KeyboardGeometry
+import com.kazumaproject.core.ui.geometry.KeyboardGeometryGroup
+import com.kazumaproject.core.ui.geometry.KeyboardGeometryItem
+import com.kazumaproject.core.ui.geometry.KeyboardGeometryMath
+import com.kazumaproject.core.ui.geometry.KeyboardViewGeometry
 import com.kazumaproject.core.ui.skin.spaceConvertKeyStyle
 import com.kazumaproject.core.domain.extensions.hide
 import com.kazumaproject.core.domain.extensions.layoutXPosition
@@ -133,6 +138,53 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
 
     // ViewBinding for the main keyboard layout
     private val binding: KeyboardLayoutBinding
+
+    private var geometry = KeyboardGeometry()
+    private var geometryBaseHeight = 0
+    private var geometryHeightListener: ((Int) -> Unit)? = null
+    private var lastRequiredGeometryHeight = 0
+
+    fun setKeyboardGeometry(value: KeyboardGeometry, baseHeightPx: Int = 0, onRequiredHeight: ((Int) -> Unit)? = null) {
+        val next = value.copy(splitPercent = 0).normalized()
+        if ((geometry.isDefault && next.isDefault) || (geometry == next && geometryBaseHeight == baseHeightPx)) {
+            geometry = next
+            geometryBaseHeight = baseHeightPx
+            geometryHeightListener = onRequiredHeight
+            return
+        }
+        cancelActiveTouch(KeyTouchCancelReason.PointerInterrupted)
+        if (next.isDefault && !geometry.isDefault) {
+            KeyboardViewGeometry.reset(geometryViews().map { KeyboardGeometryItem(it, KeyboardGeometryGroup.SINGLE) })
+        }
+        geometry = next
+        geometryBaseHeight = baseHeightPx
+        geometryHeightListener = onRequiredHeight
+        lastRequiredGeometryHeight = 0
+        requestLayout()
+    }
+
+    private fun geometryViews(): List<View> = listKeys.values.filterIsInstance<View>() + binding.sideKeySymbolModeContainer
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val requested = MeasureSpec.getSize(heightMeasureSpec)
+        if (!geometry.isDefault && geometryBaseHeight > 0 && requested > geometryBaseHeight) {
+            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(geometryBaseHeight, MeasureSpec.EXACTLY))
+            setMeasuredDimension(measuredWidth, requested)
+        } else super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val base = if (!geometry.isDefault && geometryBaseHeight > 0 && height > geometryBaseHeight) geometryBaseHeight else height
+        super.onLayout(changed, left, top, right, top + base)
+        if (geometry.isDefault) return
+        val items = geometryViews().map { KeyboardGeometryItem(it, KeyboardGeometryGroup.SINGLE) }
+        val result = KeyboardViewGeometry.apply(this, items, geometry, qwerty = false, baselineHeight = base.toFloat())
+        val required = kotlin.math.ceil(result.requiredHeightPx.toDouble()).toInt().coerceAtLeast(base)
+        if (required != lastRequiredGeometryHeight) {
+            lastRequiredGeometryHeight = required
+            post { geometryHeightListener?.invoke(required) }
+        }
+    }
 
     // KeyMap to decide which character to send on tap/flick
     private var keyMap: KeyMap
@@ -243,6 +295,8 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
     private var isEnglishFlickGuideEnabled: Boolean = false
     private var isNumberFlickGuideEnabled: Boolean = false
     private var popupViewStyle = PopupViewStyle(100, 28f)
+    private var showFlickPopup = true
+    private var showLongPressPopup = true
     private var keyboardFontSnapshot = KeyboardFontSnapshot()
 
     override fun setKeyboardFont(snapshot: KeyboardFontSnapshot) {
@@ -769,6 +823,13 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
         applyPopupTextSize()
         applyPopupColors()
         applyPopupKeyboardFont()
+    }
+
+    fun setKeyPopupVisibility(showFlickPopup: Boolean, showLongPressPopup: Boolean) {
+        if (this.showFlickPopup == showFlickPopup && this.showLongPressPopup == showLongPressPopup) return
+        this.showFlickPopup = showFlickPopup
+        this.showLongPressPopup = showLongPressPopup
+        cancelActiveTouch(KeyTouchCancelReason.PointerInterrupted)
     }
 
     fun applyPopupViewStyle(style: PopupViewStyle) {
@@ -1491,6 +1552,12 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
         binding.sideKeySymbolModeContainer.setIconPadding(paddingSize)
     }
 
+    fun setSpecialKeyLabelScalePercent(percent: Int) {
+        val scale = percent.coerceIn(60, 150) / 100f
+        binding.keySwitchKeyMode.labelScale = scale
+        binding.sideKeySymbolModeContainer.setLabelScale(scale)
+    }
+
     fun setUseThreeStateKeyboard(enabled: Boolean, numberSymbolKeyGapDp: Int = 4) {
         useThreeStateKeyboard = enabled
         binding.sideKeySymbolModeContainer.setUseThreeStateKeyboard(enabled, numberSymbolKeyGapDp)
@@ -2040,6 +2107,26 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
     private fun pressedKeyByMotionEvent(event: MotionEvent, pointer: Int): Key {
         val (x, y) = getRawCoordinates(event, pointer)
 
+        if (!geometry.isDefault) {
+            val location = IntArray(2).also(::getLocationOnScreen)
+            val sx = (screenWidth().toFloat() / width.coerceAtLeast(1)).takeIf { it > 0f } ?: 1f
+            val sy = (screenHeight().toFloat() / height.coerceAtLeast(1)).takeIf { it > 0f } ?: 1f
+            val localX = (x - location[0]) / sx
+            val localY = (y - location[1]) / sy
+            val candidates = listKeys.entries.mapNotNull { (key, value) -> (value as? View)?.let { key to it } }
+                .filter { it.second.visibility == View.VISIBLE }
+            val symbol = binding.sideKeySymbolModeContainer
+            if (symbol.visibility == View.VISIBLE && KeyboardViewGeometry.containsParentPoint(symbol, localX, localY)) {
+                val local = KeyboardViewGeometry.parentToLocal(symbol, localX, localY)
+                return if (useThreeStateKeyboard || (local?.first ?: 0f) >= symbol.width / 2f) Key.SideKeySymbol else Key.SideKeyNumberMode
+            }
+            candidates.firstOrNull { KeyboardViewGeometry.containsParentPoint(it.second, localX, localY) }?.let { return it.first }
+            return candidates.minByOrNull { (_, view) ->
+                val (cx, cy) = KeyboardViewGeometry.centerInParent(view)
+                (localX - cx) * (localX - cx) + (localY - cy) * (localY - cy)
+            }?.first ?: Key.NotSelected
+        }
+
         val keyRects = listOf(
             KeyRect(
                 Key.SideKeyPreviousChar,
@@ -2394,8 +2481,10 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
     /** Determine whether the movement is a tap or a flick in a direction **/
     private fun getGestureType(event: MotionEvent, pointer: Int = 0): GestureType {
         val (finalX, finalY) = getRawCoordinates(event, pointer)
-        val distanceX = finalX - pressedKey.initialX
-        val distanceY = finalY - pressedKey.initialY
+        val anchor = (getButtonFromKey(pressedKey.key) as? View) ?: binding.sideKeySymbolModeContainer
+        val (distanceX, distanceY) = KeyboardGeometryMath.localDelta(
+            finalX - pressedKey.initialX, finalY - pressedKey.initialY, anchor.rotation
+        )
         return when (
             FlickGestureMath.cardinalDirection(
                 deltaX = distanceX,
@@ -2533,6 +2622,7 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
 
     /** Called when a long‐press is detected; show all related popups **/
     private fun onLongPressed() {
+        if (!showLongPressPopup) return
         val button = getButtonFromKey(pressedKey.key)
         button?.let {
             if (it is AppCompatButton) {
@@ -2631,7 +2721,8 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
             skinGuide?.select(com.kazumaproject.core.ui.skin.PopupDirection.CENTER)
             return
         }
-        if (!isLongPressed) popupWindowActive.hide()
+        val showLongPressGuide = isLongPressed && showLongPressPopup
+        if (!showLongPressGuide) popupWindowActive.hide()
         val button = getButtonFromKey(pressedKey.key)
         button?.let {
             if (it is AppCompatButton) {
@@ -2639,29 +2730,29 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
                 when (currentInputMode.value) {
                     InputMode.ModeJapanese -> {
                         it.setTenKeyTextWhenTapJapanese(it.id)
-                        if (isLongPressed) popTextActive.setTextTapJapanese(it.id)
+                        if (showLongPressGuide) popTextActive.setTextTapJapanese(it.id)
                     }
 
                     InputMode.ModeEnglish -> {
                         it.setTenKeyTextWhenTapEnglish(it.id)
-                        if (isLongPressed) popTextActive.setTextTapEnglish(it.id)
+                        if (showLongPressGuide) popTextActive.setTextTapEnglish(it.id)
                     }
 
                     InputMode.ModeNumber -> {
                         it.setTenKeyTextWhenTapNumber(it.id)
-                        if (isLongPressed) popTextActive.setTextTapNumber(it.id)
+                        if (showLongPressGuide) popTextActive.setTextTapNumber(it.id)
                     }
                 }
 
-                if (isLongPressed) {
+                if (showLongPressGuide) {
                     popupWindowActive.setPopUpWindowCenter(context, bubbleViewActive, it, popupViewStyle.sizeScalePercent)
                 }
             }
             if (it is AppCompatImageButton && currentInputMode.value == InputMode.ModeNumber && it == binding.keySmallLetter) {
                 it.isPressed = true
                 KeyboardFontGlyphDrawable.setImageDrawable(it, cachedOpenBracketDrawable, keyboardFontSnapshot)
-                if (isLongPressed) popTextActive.setTextTapNumber(it.id)
-                if (isLongPressed) {
+                if (showLongPressGuide) popTextActive.setTextTapNumber(it.id)
+                if (showLongPressGuide) {
                     popupWindowActive.setPopUpWindowCenter(context, bubbleViewActive, it, popupViewStyle.sizeScalePercent)
                 }
             }
@@ -2671,6 +2762,8 @@ class TenKey(context: Context, attributeSet: AttributeSet) :
     /** Called during a “flick” gesture in an ongoing move event **/
     private fun setFlickInActionMove(gestureType: GestureType) {
         longPressJob?.cancel()
+        val popupEnabled = if (isLongPressed) showLongPressPopup else showFlickPopup
+        if (!popupEnabled) return
         if (skinGuide?.isShowing == true) {
             val direction = when (gestureType) {
                 GestureType.FlickLeft -> com.kazumaproject.core.ui.skin.PopupDirection.LEFT

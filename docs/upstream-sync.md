@@ -27,9 +27,9 @@ Actions の **Sync upstream release → Run workflow** でも実行できます�
 
 1. 更新スクリプトの単体・ローカルGit統合テスト
 2. フォークのアプリID、signature権限、Provider、通知呼び出しの保持チェック
-3. `:app:assembleLiteStandardDebug`
-4. `:app:testLiteStandardDebugUnitTest`（Sync bridgeの既存テストを含む）
-5. `:app:lintLiteStandardDebug`
+3. Lite / Full の `:app:assemble<Edition>StandardDebug`
+4. Lite / Full の `:app:test<Edition>StandardDebugUnitTest`（Sync bridgeの既存テストを含む）
+5. Lite / Full の `:app:lint<Edition>StandardDebug`
 
 Full版のモデル取得・ネイティブビルド、実機/エミュレータでの入力・IPC動作はこの条件には含まれません。
 検証用ジョブには書き込みトークンや署名Secretを渡しません。
@@ -110,3 +110,16 @@ Actionsの通知設定で失敗通知を受け取れるようにしてくださ�
   手動で検証・マージするか、不要なPR/ブランチを整理してから再実行します。
 
 停止するにはActionsで **Sync upstream release → Disable workflow** を選択します。
+
+## v1.7.160 の手動取り込み
+
+上流の履歴が分岐していたため、`v1.7.135` の上流コミットと `dev` の差分から
+Sumire固有の変更を確認し、`v1.7.160` のツリーへ三者マージで反映しました。
+取り込みコミットは `dev` と上流タグの両方を親に持つマージコミットです。
+アプリID・署名設定・Sync bridge・既存の修正を保持し、同期記録を新しい上流コミットへ更新します。
+Full固有のAIランタイムとネイティブコードも変わるため、Fork validationはLite / Fullの両方で
+ビルド・全アプリ単体テスト・Lintを実行します。PR #6の自動化変更は含みません。
+
+Zenz性能検証では、通常の変更はPRのベースと比較します。上流取り込み時は辞書資産も変わるため、
+取り込んだ上流コミットを比較元にして、同一辞書・モデルでフォーク差分の影響を測定します。
+明示的な手動実行では指定した比較元を使います。実行先のアプリIDは各APKのビルドメタデータから取得します。

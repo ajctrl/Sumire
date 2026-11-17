@@ -149,13 +149,41 @@
                     android:layout_height="wrap_content"
                     android:text="@string/input_style_two_step" />
 
+
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_flick_long_press"
                     style="@style/Widget.Material3.Chip.Filter"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/input_style_flick_long_press" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_free_flick"
+                    style="@style/Widget.Material3.Chip.Filter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/custom_free_flick" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_qwerty"
+                    style="@style/Widget.Material3.Chip.Filter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/qwerty_input_style" />
             </com.google.android.material.chip.ChipGroup>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/edit_free_flick_map"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/custom_free_flick_edit"
+                android:visibility="gone" />
+
+            <com.kazumaproject.markdownhelperkeyboard.custom_keyboard.ui.QwertyKeyEditorView
+                android:id="@+id/qwerty_key_editor"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/text_output_mode_title"
@@ -494,6 +522,7 @@
                     android:layout_height="wrap_content"
                     android:nestedScrollingEnabled="false" />
             </LinearLayout>
+
 
             <!-- フリックグリッドエディタ (ペタル・2段・特殊フリック共通) -->
             <com.kazumaproject.markdownhelperkeyboard.custom_keyboard.ui.FlickGridEditorView

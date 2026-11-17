@@ -226,9 +226,10 @@ class UtilityCandidatePreferenceTest {
             .first { it.key == SettingTabRegistry.TAB_CONVERSION_ENGINE }
 
         assertEquals(
-            R.id.utilityCandidatePreferenceFragment,
+            R.id.conversionEnginePreferenceFragment,
             SettingDestinations.destinationId(newRoute.destination),
         )
+        assertEquals(ROUTE_KEY, SettingDestinations.highlightPreferenceKey(newRoute.destination))
         assertEquals(R.xml.pref_conversion_engine, legacyTab.xmlRes)
         assertTrue(conversionEngineXmlContainsRoute())
         assertTrue(routeIsInPredictionSourceCategory())
@@ -257,7 +258,7 @@ class UtilityCandidatePreferenceTest {
             while (parser.eventType != XmlPullParser.END_DOCUMENT) {
                 when (parser.eventType) {
                     XmlPullParser.START_TAG -> when (parser.name) {
-                        "PreferenceCategory" -> {
+                        "com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.CollapsiblePreferenceCategory" -> {
                             val titleRes = parser.getAttributeResourceValue(
                                 androidNamespace,
                                 "title",
@@ -269,10 +270,10 @@ class UtilityCandidatePreferenceTest {
                             parser.getAttributeValue(androidNamespace, "key") == ROUTE_KEY
                         ) {
                             return@use currentCategoryTitle ==
-                                context.getString(R.string.prediction_source_category_title)
+                                context.getString(R.string.settings_engine_candidates_title)
                         }
                     }
-                    XmlPullParser.END_TAG -> if (parser.name == "PreferenceCategory") {
+                    XmlPullParser.END_TAG -> if (parser.name.endsWith("PreferenceCategory")) {
                         currentCategoryTitle = null
                     }
                 }

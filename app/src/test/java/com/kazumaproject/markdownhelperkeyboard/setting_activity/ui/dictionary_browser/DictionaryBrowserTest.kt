@@ -19,9 +19,9 @@ import com.kazumaproject.markdownhelperkeyboard.converter.english.louds.louds_wi
 class DictionaryBrowserTest {
     private val version = DictionaryBrowserVersion(0, true, false)
 
-    @Test fun catalogContainsAll39WordDictionariesWithoutRetiredCategoriesOrCommonTables() {
+    @Test fun catalogContainsAll150WordDictionariesWithoutRetiredCategoriesOrCommonTables() {
         val categories = DictionaryBrowserCatalog.all.map { it.category }
-        assertEquals(39, categories.size)
+        assertEquals(150, categories.size)
         assertEquals(DictionaryFileSpecs.tripleCategories().toSet(), categories.toSet())
         assertEquals(categories.size, categories.distinct().size)
         assertEquals(DictionaryCategory.SYSTEM, categories.first())

@@ -52,18 +52,37 @@ abstract class AsyncPreferenceFragment : PreferenceFragmentCompat() {
     protected open fun createPreferenceHierarchy(context: Context): PreferenceScreen =
         preferenceManager.inflateFromResource(context, preferencesXmlRes, null)
 
-    // Programmatic builders describe callbacks on IO; only main attaches listeners.
+    // Programmatic builders queue UI mutations while constructing the unpublished hierarchy.
+    protected fun configureHierarchyOnMain(action: () -> Unit) {
+        checkNotNull(hierarchyListeners.get()).add(action)
+    }
+
     protected fun Preference.configureClickListener(listener: Preference.OnPreferenceClickListener) {
-        checkNotNull(hierarchyListeners.get()).add { onPreferenceClickListener = listener }
+        configureHierarchyOnMain { onPreferenceClickListener = listener }
     }
 
     protected fun Preference.configureChangeListener(listener: Preference.OnPreferenceChangeListener) {
-        checkNotNull(hierarchyListeners.get()).add { onPreferenceChangeListener = listener }
+        configureHierarchyOnMain { onPreferenceChangeListener = listener }
     }
 
     protected open suspend fun preparePreferenceData(context: Context) = Unit
     protected open fun onPreferencesReady(savedInstanceState: Bundle?, rootKey: String?) = Unit
     protected open fun onPreferencesResumed() = Unit
+
+    override fun onCreateAdapter(preferenceScreen: PreferenceScreen): androidx.recyclerview.widget.RecyclerView.Adapter<*> =
+        SettingsPreferenceAdapter(preferenceScreen)
+
+    @Suppress("DEPRECATION")
+    override fun onDisplayPreferenceDialog(preference: Preference) {
+        if (AppPreference.setting_use_new_home_screen_preference && preference is androidx.preference.ListPreference &&
+            !preference.entries.isNullOrEmpty() && !preference.entryValues.isNullOrEmpty()) {
+            if (parentFragmentManager.findFragmentByTag(SettingsListPreferenceDialog.TAG) == null) {
+                SettingsListPreferenceDialog.forPreference(preference).apply {
+                    setTargetFragment(this@AsyncPreferenceFragment, 0)
+                }.show(parentFragmentManager, SettingsListPreferenceDialog.TAG)
+            }
+        } else super.onDisplayPreferenceDialog(preference)
+    }
 
     protected fun reloadPreferences() {
         if (loadJob?.isActive == true || view == null) return
@@ -104,6 +123,7 @@ abstract class AsyncPreferenceFragment : PreferenceFragmentCompat() {
                 listeners.forEach { it() }
                 pendingPreferenceState?.let(screen::restoreHierarchyState)
                 onPreferencesReady(null, rootKey)
+                expandHighlightedPreferenceAncestors()
                 preferencesReady = true
                 if (isResumed) onPreferencesResumed()
                 // setPreferenceScreen posts the RecyclerView adapter binding first.

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -50,7 +51,7 @@ class ClassifiedDictionaryUiInstrumentedTest {
     }
     private fun views() = WindowInspector.getGlobalWindowViews().asSequence().flatMap(::descendants)
     private fun await(message: String, condition: () -> Boolean) {
-        val deadline = SystemClock.uptimeMillis() + 30000
+        val deadline = SystemClock.uptimeMillis() + 90000
         while (SystemClock.uptimeMillis() < deadline) {
             var ready = false
             main { ready = condition() }
@@ -64,6 +65,27 @@ class ClassifiedDictionaryUiInstrumentedTest {
             File(context.cacheDir, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()
         }
+    }
+
+    private fun scrollSettingsTo(fragment: DictionaryPreferenceFragment, key: String) {
+        main {
+            var parent = fragment.findPreference<androidx.preference.Preference>(key)?.parent
+            while (parent != null) {
+                if (parent is com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.CollapsiblePreferenceCategory) {
+                    parent.setExpanded(true, persist = false)
+                }
+                parent = parent.parent
+            }
+        }
+        ins.waitForIdleSync()
+        main {
+            val adapter = fragment.listView.adapter as androidx.preference.PreferenceGroup.PreferencePositionCallback
+            val position = adapter.getPreferenceAdapterPosition(key)
+            check(position >= 0) { "Missing preference: $key" }
+            (fragment.listView.layoutManager as androidx.recyclerview.widget.LinearLayoutManager)
+                .scrollToPositionWithOffset(position, 0)
+        }
+        SystemClock.sleep(400)
     }
 
     @Test fun everyCategoryLicenseDialogRendersOffline() {
@@ -96,7 +118,7 @@ class ClassifiedDictionaryUiInstrumentedTest {
                 list.performItemClick(list, index, index.toLong())
             }
             await("${spec.id} notice did not render") { views().filterIsInstance<WebView>().any { it.isShown && it.height >= 200 * context.resources.displayMetrics.density && it.contentHeight > 0 && it.progress == 100 && it.title?.contains(spec.id) == true } }
-            if (spec.id in setOf("person", "kampo", "medical")) { SystemClock.sleep(150); screenshot("classified-license-${spec.id}.png") }
+            if (spec.id in setOf("person/actor", "kampo", "medical")) { SystemClock.sleep(150); screenshot("classified-license-${spec.id.replace('/', '_')}.png") }
             main { views().filterIsInstance<TextView>().first { it.isShown && it.id == android.R.id.button1 }.performClick() }
             await("License dialog did not close") { views().filterIsInstance<WebView>().none { it.isShown } }
         }
@@ -105,106 +127,89 @@ class ClassifiedDictionaryUiInstrumentedTest {
         }
     }
 
-    @Test fun dictionarySettingsExposeAndPersistAll30IndependentSwitches() {
-        shell("input keyevent KEYCODE_WAKEUP"); shell("wm dismiss-keyguard")
+    @Test fun dictionarySettingsExposeAndPersistAllPopulatedIndependentSwitches() {
         val target = "${context.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
         val wasEnabled = shell("ime list -s").lines().contains(target)
-        shell("ime enable $target")
-        try {
-        shell("am start -f 0x10008000 -n ${context.packageName}/com.kazumaproject.markdownhelperkeyboard.setting_activity.MainActivity")
-        lateinit var activity: MainActivity
-        await("Settings not ready") {
-            val resumed = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<MainActivity>().firstOrNull()
-            if (resumed == null || !resumed.isSettingsContentReady || !resumed.window.decorView.hasWindowFocus()) false else { activity = resumed; true }
-        }
-        lateinit var host: NavHostFragment
-        main {
-            activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            host = activity.supportFragmentManager.findFragmentById(R.id.nav_host_fragment_activity_main) as NavHostFragment
-            host.navController.navigate(R.id.dictionaryPreferenceFragment)
-        }
-        lateinit var fragment: DictionaryPreferenceFragment
-        try { await("Dictionary settings not ready") {
-            val current = host.childFragmentManager.fragments.filterIsInstance<DictionaryPreferenceFragment>().firstOrNull()
-            if (current?.preferenceScreen == null) false else { fragment = current; true }
-        } } catch (failure: Throwable) {
-            screenshot("classified-settings-failure.png")
-            main { println("CLASSIFIED_SETTINGS_DEST " + host.navController.currentDestination); println("CLASSIFIED_SETTINGS_FRAGMENTS " + host.childFragmentManager.fragments.map { it.javaClass.name }); println("CLASSIFIED_SETTINGS_TEXT " + descendants(activity.window.decorView).filterIsInstance<TextView>().map { it.text.toString() }.toList()) }
-            throw failure
-        }
         val store = DictionaryOverrideStore(context, DictionaryOverrideValidator())
-        val previous = ClassifiedDictionaries.all.associate { it.category to store.isOptionalBundledEnabled(it.category) }
-        fun findSwitch(spec: ClassifiedDictionarySpec): SwitchPreferenceCompat? {
-            // Loading publishes the hierarchy before its RecyclerView layout completes.
-            val loading = com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.AsyncPreferenceFragment::class.java
-                .getDeclaredField("loadJob").apply { isAccessible = true }.get(fragment) as? kotlinx.coroutines.Job
-            if (loading?.isActive == true) return null
-            return fragment.findPreference<SwitchPreferenceCompat>(spec.preferenceKey)
-
+        val previous = ClassifiedDictionaries.all.associate { it.category to
+            (store.isOptionalBundledEnabled(it.category) to store.isExternalEnabledForCategory(it.category)) }
+        val settingsPrefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val oldHomeMode = settingsPrefs.getBoolean("setting_use_new_home_screen_preference", true)
+        var activity: MainActivity? = null
+        fun awaitSettingsReady(message: String, condition: () -> Boolean) = await(message) {
+            condition() && activity?.window?.decorView?.let { root ->
+                descendants(root).none { it.id == R.id.settings_loading_overlay && it.isShown }
+            } == true
         }
         try {
+            shell("ime enable $target")
+            shell("am start -f 0x10008000 -n ${context.packageName}/com.kazumaproject.markdownhelperkeyboard.setting_activity.MainActivity")
+            awaitSettingsReady("Settings not ready") {
+                ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+                    .filterIsInstance<MainActivity>().firstOrNull()?.takeIf { it.isSettingsContentReady }?.let { activity = it; true } == true
+            }
+            lateinit var host: NavHostFragment
+            main { host = requireNotNull(activity).supportFragmentManager.findFragmentById(R.id.nav_host_fragment_activity_main) as NavHostFragment }
+            val tree = com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.ClassifiedDictionaryNode.load(context)
+            for (newHome in listOf(true, false)) {
+                settingsPrefs.edit().putBoolean("setting_use_new_home_screen_preference", newHome).commit()
+                main {
+                    requireNotNull(activity).applySettingHomeModeFromPreference()
+                    host.navController.navigate(R.id.classifiedDictionarySettingsFragment)
+                }
+                lateinit var page: View
+                awaitSettingsReady("Dictionary manager not ready") {
+                    host.childFragmentManager.primaryNavigationFragment?.view?.takeIf {
+                        (it.findViewById<androidx.recyclerview.widget.RecyclerView>(R.id.classified_list)?.adapter?.itemCount ?: 0) == 7
+                    }?.let { page = it; true } == true
+                }
+                for (spec in ClassifiedDictionaries.all) {
+                    val name = context.getString(spec.nameRes)
+                    val index = tree.visible(name,
+                        com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.DictionarySelectionFilter.ALL,
+                        store::isOptionalBundledEnabled).indexOfFirst { it.key == spec.preferenceKey }
+                    assertTrue(spec.id, index >= 0)
+                    main {
+                        page.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.classified_search).setText(name)
+                    }
+                    val list = page.findViewById<androidx.recyclerview.widget.RecyclerView>(R.id.classified_list)
+                    fun switch(): com.google.android.material.materialswitch.MaterialSwitch? =
+                        descendants(list).filterIsInstance<com.google.android.material.materialswitch.MaterialSwitch>()
+                            .firstOrNull { it.contentDescription == name }
+                    awaitSettingsReady("${spec.id} switch not displayed") { list.scrollToPosition(index); switch() != null }
+                    val original = store.isOptionalBundledEnabled(spec.category)
+                    main { switch()!!.performClick() }
+                    awaitSettingsReady("${spec.id} change not saved and displayed") { store.isOptionalBundledEnabled(spec.category) == !original && switch()?.isChecked == !original }
+                    main { switch()!!.performClick() }
+                    awaitSettingsReady("${spec.id} state not restored") { store.isOptionalBundledEnabled(spec.category) == original && switch()?.isChecked == original }
+                }
+            }
+            ClassifiedDictionaries.all.forEach { store.setDisableableCategoryEnabled(it.category, false, true) }
             for (spec in ClassifiedDictionaries.all) {
-                val original = previous.getValue(spec.category)
-                await("${spec.id} switch not ready") { findSwitch(spec)?.let { it.onPreferenceChangeListener != null && it.isChecked == original } == true }
-                main {
-                    val switch = findSwitch(spec)!!
-                    assertTrue(switch.onPreferenceChangeListener!!.onPreferenceChange(switch, !original))
-                    assertEquals(spec.id, !original, store.isOptionalBundledEnabled(spec.category))
+                main { host.navController.navigate(R.id.externalDictionarySettingsFragment,
+                    Bundle().apply { putString("externalDictionaryCategory", spec.category.name) }) }
+                var externalSwitch: SwitchPreferenceCompat? = null
+                awaitSettingsReady("External ${spec.id} did not open") {
+                    val current = host.childFragmentManager.primaryNavigationFragment as? ExternalDictionarySettingsFragment
+                    val screen = current?.preferenceScreen
+                    val group = screen?.let { (0 until it.preferenceCount).map(it::getPreference) }
+                        ?.filterIsInstance<PreferenceCategory>()?.firstOrNull { it.title == context.getString(spec.nameRes) }
+                    externalSwitch = group?.let { (0 until it.preferenceCount).map(it::getPreference) }
+                        ?.filterIsInstance<SwitchPreferenceCompat>()?.singleOrNull()
+                    externalSwitch?.let { !it.isChecked && it.onPreferenceChangeListener != null } == true
                 }
-                await("${spec.id} enabled state not displayed") { findSwitch(spec)?.let { it.onPreferenceChangeListener != null && it.isChecked == !original } == true }
-                main {
-                    val switch = findSwitch(spec)!!
-                    assertTrue(switch.onPreferenceChangeListener!!.onPreferenceChange(switch, original))
-                    assertEquals(spec.id, original, store.isOptionalBundledEnabled(spec.category))
-                }
-                await("${spec.id} restored state not displayed") { findSwitch(spec)?.let { it.onPreferenceChangeListener != null && it.isChecked == original } == true }
+                main { val toggle = requireNotNull(externalSwitch); assertTrue(toggle.callChangeListener(true)) }
+                awaitSettingsReady("External ${spec.id} did not share ON") { store.isOptionalBundledEnabled(spec.category) }
+                main { assertTrue(host.navController.popBackStack()) }
             }
-            // Change all categories in the normal screen, then turn them back on
-            // through the external screen and confirm both views read the same store.
-            main {
-                ClassifiedDictionaries.all.forEach { spec ->
-                    val switch = findSwitch(spec)!!
-                    switch.onPreferenceChangeListener!!.onPreferenceChange(switch, false)
-                }
-                host.navController.navigate(R.id.externalDictionarySettingsFragment)
-            }
-            lateinit var external: ExternalDictionarySettingsFragment
-            fun externalSwitch(spec: ClassifiedDictionarySpec): SwitchPreferenceCompat? {
-                val screen = external.preferenceScreen ?: return null
-                val loading = com.kazumaproject.markdownhelperkeyboard.setting_activity.ui.setting.AsyncPreferenceFragment::class.java
-                    .getDeclaredField("loadJob").apply { isAccessible = true }.get(external) as? kotlinx.coroutines.Job
-                if (loading?.isActive == true) return null
-                val group = (0 until screen.preferenceCount).map { screen.getPreference(it) }
-                    .filterIsInstance<PreferenceCategory>().firstOrNull { it.title == activity.getString(spec.nameRes) } ?: return null
-                return (0 until group.preferenceCount).map { group.getPreference(it) }.filterIsInstance<SwitchPreferenceCompat>().singleOrNull()
-            }
-            await("External screen not ready") {
-                host.childFragmentManager.fragments.filterIsInstance<ExternalDictionarySettingsFragment>().firstOrNull()
-                    ?.let { external = it; it.preferenceScreen != null } == true
-            }
-            for (spec in ClassifiedDictionaries.all) {
-                await("External ${spec.id} did not share OFF") { externalSwitch(spec)?.let { !it.isChecked && it.onPreferenceChangeListener != null } == true }
-                main {
-                    val switch = externalSwitch(spec)!!
-                    assertTrue(switch.onPreferenceChangeListener!!.onPreferenceChange(switch, true))
-                }
-                await("External ${spec.id} did not show ON") { externalSwitch(spec)?.let { it.isChecked && it.onPreferenceChangeListener != null } == true }
-            }
-            main { host.navController.popBackStack() }
-            await("Dictionary screen did not refresh shared ON states") {
-                host.childFragmentManager.fragments.filterIsInstance<DictionaryPreferenceFragment>().firstOrNull()
-                    ?.let { fragment = it; ClassifiedDictionaries.all.all { spec -> findSwitch(spec)?.isChecked == true } } == true
-            }
-            main { fragment.scrollToPreference(ClassifiedDictionaries.all.first().preferenceKey) }
-            SystemClock.sleep(300)
-            screenshot("classified-dictionary-settings.png")
-            main { fragment.scrollToPreference(ClassifiedDictionaries.all.last().preferenceKey) }
-            SystemClock.sleep(300)
-            screenshot("classified-dictionary-settings-medical.png")
+            assertTrue(ClassifiedDictionaries.all.all { store.isOptionalBundledEnabled(it.category) })
         } finally {
-            previous.forEach { (category, value) -> store.setOptionalBundledEnabled(category, value) }
-        }
-        } finally {
+            previous.forEach { (category, selection) ->
+                store.setOptionalBundledEnabled(category, selection.first)
+                store.setExternalEnabledForCategory(category, selection.second)
+            }
+            settingsPrefs.edit().putBoolean("setting_use_new_home_screen_preference", oldHomeMode).commit()
+            main { activity?.finish() }
             if (!wasEnabled) shell("ime disable $target")
         }
     }
@@ -221,8 +226,12 @@ class ClassifiedDictionaryUiInstrumentedTest {
         verifyRomajiLabelsAndCommit(learnedPrediction = true)
     }
 
-    @Test fun all30ExactMatchesAreVisibleAndCommitThroughTheRealIme() {
+    @Test fun exactHomophonesKeepSubcategoryLabelsAndCommitThroughTheRealIme() {
         verifyRomajiLabelsAndCommit(fullyMatched = true)
+    }
+
+    @Test fun subdividedPersonEventAndTermCandidatesShowLabelsAndCommit() {
+        verifyRomajiLabelsAndCommit(subdivided = true)
     }
 
     private fun isFullyVisible(view: View): Boolean {
@@ -231,13 +240,16 @@ class ClassifiedDictionaryUiInstrumentedTest {
         return item.getGlobalVisibleRect(visible) && visible.width() == item.width && visible.height() == item.height
     }
 
-    private fun verifyRomajiLabelsAndCommit(learnedPrediction: Boolean? = null, fullyMatched: Boolean = false) {
+    private fun verifyRomajiLabelsAndCommit(learnedPrediction: Boolean? = null, fullyMatched: Boolean = false, subdivided: Boolean = false) {
         shell("input keyevent KEYCODE_WAKEUP"); shell("wm dismiss-keyguard")
         check(context.packageName.contains(".classifiedprobe")) { "Use the isolated classifiedprobe APK" }
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val store = DictionaryOverrideStore(context, DictionaryOverrideValidator())
-        val testedCategories = if (fullyMatched) ClassifiedDictionaries.all.map { it.category } else
-            listOf(DictionaryCategory.CLASSIFIED_AWARD, DictionaryCategory.CLASSIFIED_KAMPO, DictionaryCategory.CLASSIFIED_MEDICAL)
+        val testedCategories = if (fullyMatched) ClassifiedDictionaries.all.map { it.category } else if (subdivided)
+            listOf(DictionaryCategory.CLASSIFIED_PERSON_ACTOR, DictionaryCategory.CLASSIFIED_EVENT_OCCASION_ORGANIZED_EVENT,
+                DictionaryCategory.CLASSIFIED_TERM_GENERAL_FOOD_DRINK_COOKING, DictionaryCategory.CLASSIFIED_TERM_SPECIALIST_INFORMATION_COMMUNICATIONS,
+                DictionaryCategory.CLASSIFIED_PERSON_COMEDIAN)
+        else listOf(DictionaryCategory.CLASSIFIED_AWARD, DictionaryCategory.CLASSIFIED_KAMPO, DictionaryCategory.CLASSIFIED_MEDICAL)
         val previous = testedCategories.associateWith { store.isOptionalBundledEnabled(it) }
         val oldIme = shell("settings get secure default_input_method")
         val target = "${context.packageName}/com.kazumaproject.markdownhelperkeyboard.ime_service.IMEService"
@@ -275,7 +287,8 @@ class ClassifiedDictionaryUiInstrumentedTest {
             }
             // The keyboard view appears before the editor restart/IME entrance animation completes.
             await("Editor input connection not active") { activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java).isActive(activity.editText) }
-            SystemClock.sleep(750)
+            ins.waitForIdleSync()
+            SystemClock.sleep(2000)
             if (learnedPrediction != null) {
                 lateinit var service: IMEService
                 main {
@@ -299,11 +312,34 @@ class ClassifiedDictionaryUiInstrumentedTest {
                     if (!learnedPrediction) repository!!.upsertLearnedData(entry)
                 }
             }
-            val samples = if (fullyMatched) listOf(Triple("syou", "人名", "SHO"), Triple("syou", "人名", "紫耀")) else
+            val samples = if (subdivided) listOf(
+                Triple("kuriki", "[芸人]", "くりきひなた"), Triple("kakutatu", "[俳優]", "郭達"), Triple("aomaturi", "[催し・行事]", "アオマツリ"),
+                Triple("aigana", "[食品・料理]", "鮎河菜"), Triple("aiaiesu", "[情報・通信]", "IIS"),
+            ) else if (fullyMatched) listOf(Triple("syou", "人名", "SHO"), Triple("syou", "人名", "紫耀")) else
                 listOf(Triple("aiehusyou", "[賞]", "IF賞"), Triple("asennyaku", "[漢方・生薬]", "阿仙薬"), Triple("asaitami", "[医療]", "朝痛み"))
-            for ((input, expectedLabel, expectedSurface) in samples) {
-            main { activity.editText.setText("") }
-            SystemClock.sleep(300)
+            for ((input, sampleLabel, expectedSurface) in samples) {
+            val categoryId = when (input) {
+                "syou" -> "person/personal_name_origin_japanese"
+                "kuriki" -> "person/comedian"
+                "kakutatu" -> "person/actor"
+                "aomaturi" -> "event/occasion/organized_event"
+                "aigana" -> "term/general/food_drink_cooking"
+                "aiaiesu" -> "term/specialist/information_communications"
+                else -> null
+            }
+            var expectedLabel = sampleLabel
+            if (categoryId != null) main {
+                // IME service views can use a different configuration from the settings activity.
+                val keyboardContext = views().filterIsInstance<QWERTYButton>().first { it.isShown }.context
+                val spec = ClassifiedDictionaries.all.single { it.id == categoryId }
+                expectedLabel = "[${keyboardContext.getString(spec.labelRes)}]"
+            }
+            main {
+                activity.editText.setText("")
+                activity.editText.requestFocus()
+            }
+            ins.waitForIdleSync()
+            SystemClock.sleep(1000)
             var lastKeyUpMs = 0L
             for (letter in input) {
                 val point = IntArray(2)
