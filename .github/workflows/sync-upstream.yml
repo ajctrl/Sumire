@@ -1,53 +1,90 @@
-name: Sync upstream release
+name: Validate and publish upstream update
+run-name: Validate upstream ${{ github.event.workflow_run.id }}:${{ github.event.workflow_run.run_attempt }}
 
 on:
-  schedule:
-    - cron: '23 3 * * *'
-  workflow_dispatch:
+  workflow_run:
+    workflows: [Sync upstream release]
+    types: [completed]
+    branches: [dev]
 
 permissions:
   contents: read
 
 concurrency:
-  group: sync-upstream-release
+  group: sync-upstream-completion
   cancel-in-progress: false
 
 jobs:
   prepare:
-    if: github.repository == 'ajctrl/Sumire' && github.ref == 'refs/heads/dev'
+    # Only the dedicated trusted producer can supply plans or repair checkpoints.
+    if: >-
+      github.repository == 'ajctrl/Sumire' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.path == '.github/workflows/prepare-upstream-sync.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'dev' &&
+      contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event.workflow_run.event)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
-      contents: write
-      pull-requests: write
+      actions: read
+      contents: read
     outputs:
-      changed: ${{ steps.sync.outputs.changed }}
-      head: ${{ steps.sync.outputs.head }}
-      base: ${{ steps.sync.outputs.base }}
-      pr: ${{ steps.sync.outputs.pr }}
+      review_required: ${{ steps.plan.outputs.review_required }}
+      full_validation: ${{ steps.plan.outputs.full_validation }}
+      changed: ${{ steps.plan.outputs.changed }}
+      paused: ${{ steps.plan.outputs.paused }}
+      head: ${{ steps.plan.outputs.head }}
+      base: ${{ steps.plan.outputs.base }}
+      pr: ${{ steps.plan.outputs.pr }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: dev
-          fetch-depth: 0
-      - name: Prepare update PR
-        id: sync
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: sumire-sync-plan-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ${{ runner.temp }}/sync-plan
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Read prepared update
+        id: plan
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/sync-upstream.py
+          EXPECTED_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: python3 .github/scripts/sync-plan.py read "$RUNNER_TEMP/sync-plan/sync-plan.json"
 
   validate:
     needs: prepare
-    if: needs.prepare.outputs.changed == 'true'
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/fork-validation.yml
     with:
       ref: ${{ needs.prepare.outputs.head }}
 
+  mushroom:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mushroom-regression.yml
+    with:
+      ref: ${{ needs.prepare.outputs.head }}
+
+  zenz:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/zenz-correction-performance.yml
+    with:
+      ref: ${{ needs.prepare.outputs.head }}
+      baseline_ref: ${{ needs.prepare.outputs.base }}
+
   merge:
-    needs: [prepare, validate]
-    if: needs.prepare.outputs.changed == 'true'
+    needs: [prepare, validate, mushroom, zenz]
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.review_required != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -86,6 +123,7 @@ jobs:
     # Also retry an unpublished release when upstream has no newer version.
     if: >-
       ${{ !cancelled() && needs.prepare.result == 'success' &&
+          needs.prepare.outputs.paused != 'true' && needs.prepare.outputs.review_required != 'true' &&
           (needs.prepare.outputs.changed == 'false' || needs.merge.result == 'success') }}
     permissions:
       contents: write

@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "sync-upstream.py"
@@ -43,7 +43,8 @@ class MergeTests(unittest.TestCase):
         self.git("init", "-b", "dev", "upstream")
         os.chdir(self.root / "upstream")
         self.identity()
-        Path("feature.txt").write_text("base\n")
+        Path("docs").mkdir()
+        Path("docs/guide.md").write_text("base\n")
         Path("app").mkdir()
         Path("app/build.gradle").write_text(
             'android {\n    versionName "1.7.128"\n    versionCode 821\n}\n')
@@ -51,7 +52,7 @@ class MergeTests(unittest.TestCase):
         self.initial = self.git("rev-parse", "HEAD")
         self.git("clone", "--bare", ".", str(self.root / "origin.git"))
         self.git("clone", str(self.root / "origin.git"), str(self.root / "fork"))
-        Path("feature.txt").write_text("upstream update\n")
+        Path("docs/guide.md").write_text("upstream update\n")
         Path("app/build.gradle").write_text(
             'android {\n    versionName "1.7.129"\n    versionCode 822\n}\n')
         self.commit("release")
@@ -67,10 +68,26 @@ class MergeTests(unittest.TestCase):
         self.git("push", "origin", "dev")
         self.base = self.git("rev-parse", "HEAD")
         self.env = patch.dict(os.environ, GITHUB_REPOSITORY="ajctrl/Sumire",
-                              GITHUB_OUTPUT=str(self.root / "outputs"))
+                              GITHUB_OUTPUT=str(self.root / "outputs"), OPENAI_API_KEY="",
+                              RUNNER_TEMP=str(self.root / "runner-temp"))
         self.env.start()
         self.addCleanup(self.env.stop)
+        # Exercise real transport/ledger logic with mocked OpenAI responses;
+        # Codex subprocess/gateway isolation has separate tests.
+        complete = patch.object(sync.conflict_resolver.Resolver, "complete",
+                                sync.conflict_resolver.transport.Resolver.complete)
+        complete.start()
+        self.addCleanup(complete.stop)
+        pending = patch.object(sync.upstream_review, "find", return_value=None)
+        self.pending_review = pending.start()
+        self.addCleanup(pending.stop)
+        record = patch.object(sync.upstream_review, "record", return_value={"html_url": "https://github.com/ajctrl/Sumire/issues/43"})
+        self.record_review = record.start()
+        self.addCleanup(record.stop)
         self.real_run = sync.run
+        risk = patch.object(sync.conflict_resolver.Resolver, "assess_update")
+        self.risk = risk.start()
+        self.addCleanup(risk.stop)
 
     def git(self, *args):
         return subprocess.run(["git", *args], check=True, text=True,
@@ -100,11 +117,53 @@ class MergeTests(unittest.TestCase):
                 patch.object(sync, "run", side_effect=self.fake_run):
             sync.main()
 
+    def prepare_document_conflicts(self, count):
+        """Create real three-stage conflicts sharing a common document baseline."""
+        paths = [Path("docs/guide.md")] + [Path(f"docs/guide-{i}.md") for i in range(count - 1)]
+        os.chdir(self.root / "upstream")
+        self.git("switch", "-c", "expanded-base", self.initial)
+        for path in paths[1:]:
+            path.write_text("base prose\n")
+        self.commit("shared documentation baseline")
+        common = self.git("rev-parse", "HEAD")
+        for path in paths:
+            path.write_text("upstream prose\n")
+        Path("app/build.gradle").write_text(
+            'android {\n    versionName "1.7.129"\n    versionCode 822\n}\n')
+        self.commit("release documentation update")
+        self.target = self.git("rev-parse", "HEAD")
+        self.git("tag", "-f", "v1.7.129")
+        os.chdir(self.root / "fork")
+        self.git("fetch", str(self.root / "upstream"), common)
+        self.git("merge", "--no-edit", common)
+        for path in paths:
+            path.write_text("fork prose\n")
+        self.commit("fork documentation changes")
+        self.git("push", "origin", "dev")
+        self.base = self.git("rev-parse", "HEAD")
+        return paths
+
+    def test_direct_codex_edit_resolves_many_files_and_related_code(self):
+        paths = self.prepare_document_conflicts(9)
+        changed = {str(path): {"text": "combined prose\n", "executable": False} for path in paths}
+        changed["related.kt"] = {"text": "related adjustment\n", "executable": False}
+        with patch.dict(os.environ, OPENAI_API_KEY="test-only", OPENAI_BUDGET_FILE=str(self.root / "ledger")), \
+                patch.object(sync.conflict_resolver.Resolver, "complete", return_value={
+                    "completed": True, "requires_review": False, "reason": "通常の更新", "edits": changed}) as complete:
+            self.invoke()
+        self.assertTrue(complete.call_args.kwargs["editable"])
+        description = json.loads(complete.call_args.args[0]["input"])
+        self.assertIn("app/build.gradle", description["whole_update"]["paths"])
+        self.assertIn("upstream prose", description["whole_update"]["diff"])
+        self.assertEqual(self.git("show", "HEAD:related.kt"), "related adjustment")
+        for path in paths:
+            self.assertEqual(path.read_text(), "combined prose\n")
+
     def test_merge_preserves_fork_and_ancestry_and_retry(self):
         self.invoke()
         first = self.git("rev-parse", "HEAD")
         self.assertEqual(Path("fork.txt").read_text(), "keep me\n")
-        self.assertEqual(Path("feature.txt").read_text(), "upstream update\n")
+        self.assertEqual(Path("docs/guide.md").read_text(), "upstream update\n")
         self.assertEqual(self.git("show", "-s", "--format=%P", "HEAD"),
                          f"{self.base} {self.target}")
         self.assertEqual(json.loads(Path(".github/upstream.json").read_text())["commit"],
@@ -116,7 +175,7 @@ class MergeTests(unittest.TestCase):
         self.assertIn(f"head={first}\n", (self.root / "outputs").read_text())
 
     def test_conflict_stops_without_changing_dev(self):
-        Path("feature.txt").write_text("fork conflicting change\n")
+        Path("docs/guide.md").write_text("fork conflicting change\n")
         self.commit("conflict")
         self.git("push", "origin", "dev")
         base = self.git("rev-parse", "HEAD")
@@ -164,9 +223,175 @@ class MergeTests(unittest.TestCase):
         self.commit("alter automation")
         self.git("tag", "-f", "v1.7.129")
         os.chdir(self.root / "fork")
-        with self.assertRaisesRegex(RuntimeError, "manual review required"):
+        self.invoke()
+        self.assertTrue(self.record_review.called)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
+
+    def test_api_resolves_allowed_documentation_and_retry_reuses_exact_candidate(self):
+        Path("docs/guide.md").write_text("fork change\n")
+        self.commit("fork change")
+        self.git("push", "origin", "dev")
+        base = self.git("rev-parse", "HEAD")
+        client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
+        def repair(conflicts, overview=None):
+            for path, _ in conflicts:
+                Path(path).write_text("fork and upstream combined\n")
+            return [path for path, _ in conflicts]
+        client.repair_update.side_effect = repair
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+            first = self.git("rev-parse", "HEAD")
+            branch = self.git("branch", "--show-current")
+            self.assertEqual(Path("docs/guide.md").read_text(), "fork and upstream combined\n")
+            self.assertEqual(self.git("show", "-s", "--format=%P", first),
+                             f"{base} {self.target}")
+            self.git("switch", "dev")
+            self.git("branch", "-D", branch)
+            self.invoke([{"number": 42, "state": "open"}])
+        client.repair_update.assert_called_once()
+        self.assertEqual(self.git("rev-parse", "HEAD"), first)
+
+    def test_api_failure_aborts_merge_without_pushing_a_candidate(self):
+        Path("docs/guide.md").write_text("fork conflict\n")
+        self.commit("fork change")
+        self.git("push", "origin", "dev")
+        before = self.git("rev-parse", "HEAD")
+        client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
+        client.repair_update.side_effect = RuntimeError("budget exhausted")
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            with self.assertRaisesRegex(RuntimeError, "budget exhausted"):
+                self.invoke()
+        self.assertEqual(self.git("rev-parse", "HEAD"), before)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertFalse((self.root / "outputs").exists())
+        self.assertEqual(self.git("ls-remote", "--heads", "origin", "refs/heads/upstream/*"), "")
+
+    def test_api_mode_stops_on_automation_changes_without_calling_model(self):
+        os.chdir(self.root / "upstream")
+        Path(".github/workflows").mkdir(parents=True)
+        Path(".github/workflows/android.yml").write_text("upstream release policy\n")
+        self.commit("change release workflow")
+        self.git("tag", "-f", "v1.7.129")
+        os.chdir(self.root / "fork")
+        client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+            self.assertTrue(self.record_review.called)
+        client.resolve.assert_not_called()
+        self.assertFalse(Path(".github/workflows/android.yml").exists())
+
+    def test_api_repairs_gradle_configuration_and_preserves_release_numbers(self):
+        os.chdir(self.root / "upstream")
+        gradle = Path("app/build.gradle")
+        gradle.write_text(gradle.read_text().replace("android {", "android { // upstream"))
+        self.commit("upstream configuration")
+        self.git("tag", "-f", "v1.7.129")
+        os.chdir(self.root / "fork")
+        gradle.write_text('android { // fork\n    versionName "1.7.128.2"\n'
+                          '    versionCode 830\n}\n')
+        self.commit("fork configuration and manual version")
+        self.git("push", "origin", "dev")
+        client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
+        def repair(conflicts, overview=None):
+            gradle.write_text('android { // combined\n    versionName "1.7.128"\n    versionCode 821\n}\n')
+            return [str(gradle)]
+        client.repair_update.side_effect = repair
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+        client.repair_update.assert_called_once()
+        client.assess_update.assert_called_once()
+        self.assertEqual(sync.release_versions.version_info(gradle.read_text()), ("1.7.129", 831))
+
+    def test_history_divergence_requires_review(self):
+        self.git("fetch", str(self.root / "upstream"), "dev")
+        with self.assertRaisesRegex(RuntimeError, "history diverged"):
+            sync.assert_history(self.target, self.initial, self.target)
+
+    def test_modified_candidate_is_rejected_before_reuse(self):
+        self.invoke()
+        branch = self.git("branch", "--show-current")
+        Path("docs/guide.md").write_text("changed outside automation\n")
+        self.git("add", ".")
+        self.git("commit", "--amend", "--no-edit")
+        self.git("push", "--force", "origin", branch)  # Isolated local test remote.
+        self.git("switch", "dev")
+        self.git("branch", "-D", branch)
+        self.invoke()
+        self.assertIn("Existing update branch was modified", self.record_review.call_args.args[4])
+
+    def test_api_cannot_reconcile_rewritten_history(self):
+        os.chdir(self.root / "upstream")
+        tree = self.git("rev-parse", self.target + "^{tree}")
+        rewritten = self.git("commit-tree", tree, "-m", "rewritten upstream release")
+        self.git("tag", "-f", "v1.7.129", rewritten)
+        os.chdir(self.root / "fork")
+        client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+            self.assertIn("history diverged", self.record_review.call_args.args[4])
+        client.resolve.assert_not_called()
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
+        self.assertIn("review_required=true", (self.root / "outputs").read_text())
+
+    def test_documentation_and_add_add_test_conflicts_are_both_resolved(self):
+        os.chdir(self.root / "upstream")
+        Path("tests").mkdir()
+        Path("tests/FeatureTest.kt").write_text("upstream assertions\n")
+        self.commit("new upstream test")
+        self.git("tag", "-f", "v1.7.129")
+        os.chdir(self.root / "fork")
+        Path("tests").mkdir()
+        Path("tests/FeatureTest.kt").write_text("fork assertions\n")
+        Path("docs/guide.md").write_text("fork prose\n")
+        self.commit("fork test and prose")
+        self.git("push", "origin", "dev")
+        client = Mock(enabled=True)
+        client.state.data = {"repairs": {}}
+        def repair(conflicts, overview=None):
+            for path, _ in conflicts:
+                Path(path).write_text("combined prose\n" if path.endswith(".md") else "combined assertions\n")
+            return [path for path, _ in conflicts]
+        client.repair_update.side_effect = repair
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+        self.assertEqual(client.repair_update.call_count, 1)
+        self.assertEqual(Path("tests/FeatureTest.kt").read_text(), "combined assertions\n")
+        client.assess_update.assert_called_once()
+
+    def test_risky_conflict_free_update_stops_before_commit_or_push(self):
+        self.risk.side_effect = RuntimeError("Manual review required: breaking interface")
+        with self.assertRaisesRegex(RuntimeError, "breaking interface"):
             self.invoke()
         self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(self.git("ls-remote", "--heads", "origin", "refs/heads/upstream/*"), "")
+
+    def test_review_required_preserves_candidate_patch_and_returns_success(self):
+        self.risk.side_effect = sync.conflict_resolver.policy.ReviewRequired("breaking interface")
+        self.invoke()
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        outputs = (self.root / "outputs").read_text()
+        self.assertIn("review_required=true", outputs)
+        self.assertIn("changed=false", outputs)
+        self.assertIn("upstream update", self.record_review.call_args.args[5])
+        self.assertEqual(self.git("ls-remote", "--heads", "origin", "refs/heads/upstream/*"), "")
+
+    def test_pending_review_skips_codex_and_does_not_create_another_issue(self):
+        self.pending_review.return_value = {"html_url": "https://github.com/ajctrl/Sumire/issues/43",
+                                            "body": "human review is pending"}
+        with patch.object(sync.conflict_resolver, "Resolver") as client:
+            self.invoke()
+            client.assert_not_called()
+        self.record_review.assert_not_called()
+        self.assertIn("review_required=true", (self.root / "outputs").read_text())
+        self.assertTrue((self.root / "runner-temp/upstream-review/report.md").exists())
+
 
 
 if __name__ == "__main__":
