@@ -55,9 +55,6 @@ jobs:
           SUMIRE_CODEX_BIN: /usr/local/bin/codex
           SUMIRE_CODEX_USER: sumire-codex
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
-          OPENAI_MODEL_CONTEXT_WINDOW: ${{ vars.OPENAI_MODEL_CONTEXT_WINDOW }}
-          OPENAI_MODEL_MAX_OUTPUT_TOKENS: ${{ vars.OPENAI_MODEL_MAX_OUTPUT_TOKENS }}
           OPENAI_DAILY_TOKEN_BUDGET: ${{ vars.OPENAI_DAILY_TOKEN_BUDGET || '200000' }}
           OPENAI_BUDGET_FILE: ${{ runner.temp }}/repair-state.json
           SUMIRE_ARTIFACT_CLIENT: ${{ runner.temp }}/sumire-artifact-client/node_modules/@actions/artifact

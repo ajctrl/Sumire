@@ -21,14 +21,11 @@ BudgetPaused = repair_state.BudgetPaused
 
 HUNK = re.compile(r"^<<<<<<< [^\n]*\n.*?^>>>>>>> [^\n]*(?:\n|$)", re.M | re.S)
 MARKER = re.compile(r"^(?:<{7}|\|{7}|={7}|>{7})(?: |$)", re.M)
-# Verified 2026-11-14 against https://developers.openai.com/api/docs/models/<model>.
-# These are model specifications, not application-specific output budgets.
-MODEL_LIMITS = {
-    "gpt-6.1-sol": (1_050_000, 128_000),
-    "gpt-6-astra": (1_050_000, 128_000),
-    "gpt-6-sol": (1_050_000, 128_000),
-    "gpt-6-luna": (1_050_000, 128_000),
-}
+# Shared settings for the API resolver and Codex worker.
+# When changing models, set the limits to that model's specifications.
+DEFAULT_MODEL = "gpt-6.2-sol"
+MODEL_CONTEXT_WINDOW = 1_050_000
+MODEL_MAX_OUTPUT_TOKENS = 128_000
 TOKEN_MARGIN = 256
 MIN_OUTPUT_TOKENS = 16  # Responses API minimum.
 INSTRUCTIONS = """Resolve Git diff3 conflict hunks in a Japanese Android keyboard fork.
@@ -62,7 +59,7 @@ SCHEMA = {
 class Resolver:
     def __init__(self, task="standalone"):
         self.key = os.environ.get("OPENAI_API_KEY", "")
-        self.model = os.environ.get("OPENAI_MODEL") or "gpt-6.1-sol"
+        self.model = DEFAULT_MODEL
         self.limit = int(os.environ.get("OPENAI_DAILY_TOKEN_BUDGET") or "200000")
         self.calls = 0
         self.task = task + ":" + policy.VERSION
@@ -99,13 +96,7 @@ class Resolver:
             self.state.finish(self.task)
 
     def model_limits(self):
-        defaults = MODEL_LIMITS.get(self.model, (None, None))
-        context = os.environ.get("OPENAI_MODEL_CONTEXT_WINDOW") or defaults[0]
-        output = os.environ.get("OPENAI_MODEL_MAX_OUTPUT_TOKENS") or defaults[1]
-        if context is None or output is None:
-            raise ValueError("Unknown model limits; set OPENAI_MODEL_CONTEXT_WINDOW and "
-                             "OPENAI_MODEL_MAX_OUTPUT_TOKENS from the model specification")
-        context, output = int(context), int(output)
+        context, output = MODEL_CONTEXT_WINDOW, MODEL_MAX_OUTPUT_TOKENS
         if context <= MIN_OUTPUT_TOKENS or output < MIN_OUTPUT_TOKENS:
             raise ValueError("Invalid model context or output limit")
         return context, output

@@ -22,7 +22,7 @@ class GatewayTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         env = patch.dict(os.environ, OPENAI_API_KEY="not-real", SUMIRE_ARTIFACT_CLIENT="",
                          OPENAI_BUDGET_FILE=str(Path(temporary.name) / "repair-state.json"),
-                         OPENAI_DAILY_TOKEN_BUDGET="200000", OPENAI_MODEL="gpt-6.1-sol")
+                         OPENAI_DAILY_TOKEN_BUDGET="200000")
         env.start()
         self.addCleanup(env.stop)
         self.resolver = bridge.Resolver()
@@ -47,7 +47,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.resolver.state.data["pending"], {})
         generations = [call.args[1] for call in send.call_args_list if call.args[0] == "responses"]
         for generation in generations:
-            self.assertEqual(generation["model"], "gpt-6.1-sol")
+            self.assertEqual(generation["model"], bridge.transport.DEFAULT_MODEL)
             self.assertEqual(generation["max_output_tokens"], 128000)
             self.assertEqual(generation["reasoning"], {"effort": "high"})
             self.assertFalse(generation["store"])

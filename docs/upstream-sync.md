@@ -30,8 +30,7 @@ Actions の **Sync upstream release → Run workflow** でも実行できます�
 モデルが人の判断を必要とした場合は停止します。検証失敗時は別の準備実行で修復し、日次予算切れは一時中断します。進展がない場合や判断が必要な場合は人へ引き継ぎます。
 APIキー未設定では、競合修復も変更全体のリスク確認も通過できません。
 手動で修復・再開する場合は **Sync upstream release → Run workflow → dev** で起動します。
-既定は **sol-high**（モデル `gpt-6.1-sol`、`reasoning.effort: high`）です。
-モデルを変更する場合はActions Variable `OPENAI_MODEL` を設定します。推論設定はhighを使います。
+モデルを変更する場合は `.github/scripts/resolve-upstream-conflicts.py` の `DEFAULT_MODEL` 定数を編集します。推論設定はhighを使います。
 公式Codex CLI `0.169.0` をActionsでインストールし、`codex exec` を使います。
 Codexが必要なファイルを読み、隔離した作業コピーを直接編集します。JSONは完了・確認待ち・理由の報告だけに使います。
 外側の処理は作業コピーの実際の差分を検査し、対象のチェックアウトへ反映します。
@@ -113,12 +112,8 @@ Issues機能を有効にする必要はありません。
 入力の計数に通信エラーなどで失敗した場合は実行失敗として停止します。
 入力自体がモデル・日次上限に収まらない場合は人の確認待ちにします。
 
-既定の `gpt-6.1-sol` と、`gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` のモデル仕様は、
-コンテキスト1,050,000・最大出力128,000トークンとして実装しています。
-[モデルの公式仕様](https://developers.openai.com/api/docs/models/gpt-6.1-sol)に基づく値です。
-ほかのモデルを使う場合や仕様が変更された場合は、Actions Variablesの
-`OPENAI_MODEL_CONTEXT_WINDOW` と `OPENAI_MODEL_MAX_OUTPUT_TOKENS` に公式の上限値を設定してください。
-これは小さな出力枠を独自に設ける設定ではなく、利用モデルの仕様を指定するための設定です。
+モデルの上限値は `DEFAULT_MODEL` の直下にある `MODEL_CONTEXT_WINDOW` と
+`MODEL_MAX_OUTPUT_TOKENS` で指定します。モデル変更時に仕様が異なる場合は、この2定数も更新します。
 古い途中保存に含まれる8K・倍増の出力枠は無視し、再開時点のモデル仕様と残り予算から再計算します。
 
 生成前の予約、応答後の使用量、修正完了のたびにGitHub Artifactへ保存します。

@@ -29,10 +29,15 @@ class ResolverTests(unittest.TestCase):
         self.ledger = Path(self.temp.name) / "budget.json"
         env = patch.dict(os.environ, OPENAI_API_KEY="test-not-a-real-key",
                          OPENAI_BUDGET_FILE=str(self.ledger),
-                         OPENAI_DAILY_TOKEN_BUDGET="20000", OPENAI_MODEL="gpt-6.1-sol")
+                         OPENAI_DAILY_TOKEN_BUDGET="20000")
         env.start()
         self.addCleanup(env.stop)
         self.client = resolver.Resolver()
+
+    def test_model_uses_shared_constant_even_with_legacy_environment_variable(self):
+        with patch.object(resolver, "DEFAULT_MODEL", "configured-default"), \
+                patch.dict(os.environ, OPENAI_MODEL="legacy-model"):
+            self.assertEqual(resolver.Resolver().model, "configured-default")
 
     def test_only_conflict_hunks_change_and_output_is_bounded(self):
         source = "before\n" + CONFLICT + "middle\n" + CONFLICT + "after\n"
@@ -172,21 +177,20 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(self.client.state.data["pending"], {"unknown-request": 500})
 
     def test_model_context_space_also_bounds_output(self):
-        with patch.dict(os.environ, OPENAI_MODEL_CONTEXT_WINDOW="1000"), \
+        with patch.object(resolver, "MODEL_CONTEXT_WINDOW", 1000), \
                 patch.object(self.client, "request", side_effect=[{"input_tokens": 100}, response(["merged\n"])]) as request:
             self.client.resolve("docs/guide.md", CONFLICT)
         self.assertEqual(request.call_args.args[1]["max_output_tokens"], 644)
 
-    def test_unknown_model_requires_explicit_model_specifications(self):
-        self.client.model = "custom-model"
-        with patch.dict(os.environ, OPENAI_MODEL_CONTEXT_WINDOW="", OPENAI_MODEL_MAX_OUTPUT_TOKENS=""), \
-                patch.object(self.client, "request") as request:
-            with self.assertRaisesRegex(ValueError, "Unknown model limits"):
-                self.client.resolve("docs/guide.md", CONFLICT)
-        request.assert_not_called()
-        with patch.dict(os.environ, OPENAI_MODEL_CONTEXT_WINDOW="10000", OPENAI_MODEL_MAX_OUTPUT_TOKENS="2500"), \
-                patch.object(self.client, "request", side_effect=[{"input_tokens": 100}, response(["merged\n"])]) as request:
-            self.client.resolve("docs/guide.md", CONFLICT)
+    def test_new_model_uses_configured_limits_without_model_registry(self):
+        with patch.object(resolver, "DEFAULT_MODEL", "new-model"), \
+                patch.object(resolver, "MODEL_CONTEXT_WINDOW", 10000), \
+                patch.object(resolver, "MODEL_MAX_OUTPUT_TOKENS", 2500):
+            client = resolver.Resolver()
+            with patch.object(client, "request", side_effect=[
+                    {"input_tokens": 100}, response(["merged\n"])]) as request:
+                client.resolve("docs/guide.md", CONFLICT)
+        self.assertEqual(request.call_args.args[1]["model"], "new-model")
         self.assertEqual(request.call_args.args[1]["max_output_tokens"], 2500)
 
     def test_old_saved_small_output_allowance_does_not_limit_new_requests(self):
@@ -215,7 +219,7 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
 
     def test_input_cannot_exceed_the_model_context(self):
-        with patch.dict(os.environ, OPENAI_MODEL_CONTEXT_WINDOW="1000"), \
+        with patch.object(resolver, "MODEL_CONTEXT_WINDOW", 1000), \
                 patch.object(self.client, "request", return_value={"input_tokens": 1000}) as request:
             with self.assertRaisesRegex(RuntimeError, "Input cannot fit"):
                 self.client.resolve("docs/guide.md", CONFLICT)
