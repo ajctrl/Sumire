@@ -66,16 +66,24 @@ def output(**values):
             stream.write(f"{key}={value}\n")
 
 
-def assert_history(previous, upstream, base):
+def release_merge_base(previous, upstream, base):
+    """Use normal Git ancestry unless the new release is on a sibling line."""
     git("merge-base", "--is-ancestor", previous, base)
-    result = run("git", "merge-base", "--is-ancestor", previous, upstream, check=False)
-    if result.returncode:
-        raise conflict_resolver.policy.ReviewRequired("Upstream release history diverged; human review required")
+    common = run("git", "merge-base", previous, upstream, check=False)
+    if common.returncode == 1:
+        raise conflict_resolver.policy.ReviewRequired("Upstream releases have no common history")
+    common.check_returncode()
+    included = run("git", "merge-base", "--is-ancestor", upstream, base, check=False)
+    if included.returncode == 0:
+        raise conflict_resolver.policy.ReviewRequired("Upstream release is already in dev history")
+    if included.returncode != 1:
+        included.check_returncode()
+    return None if common.stdout.strip() == previous else previous
 
 
-def merge_app_version(base, upstream, tag, previous_tag, allow_conflicts=False):
+def merge_app_version(base, upstream, tag, previous_tag, allow_conflicts=False, explicit_base=None):
     """Merge real Gradle changes normally, handling only release numbers specially."""
-    ancestor = git("merge-base", base, upstream)
+    ancestor = explicit_base or git("merge-base", base, upstream)
     original = git("show", f"{ancestor}:{VERSION_FILE}")
     ours = git("show", f"{base}:{VERSION_FILE}")
     theirs = git("show", f"{upstream}:{VERSION_FILE}")
@@ -101,9 +109,18 @@ def merge_app_version(base, upstream, tag, previous_tag, allow_conflicts=False):
         merged.stdout, upstream_name, max(upstream_code, fork_code + 1))
 
 
-def merge_upstream(upstream):
-    merged = run("git", "-c", "merge.conflictStyle=diff3", "merge",
-                 "--no-ff", "--no-commit", upstream, check=False)
+def merge_upstream(upstream, explicit_base=None):
+    if explicit_base:
+        # Set up an abortable merge with the real upstream parent. Then merge
+        # its tree into the untouched index using the recorded release as base.
+        git("merge", "--no-ff", "--no-commit", "-s", "ours", upstream)
+        merged = run("git", "-c", "merge.conflictStyle=diff3", "merge-recursive",
+                     explicit_base, "--", "HEAD", upstream, check=False)
+    else:
+        merged = run("git", "-c", "merge.conflictStyle=diff3", "merge",
+                     "--no-ff", "--no-commit", upstream, check=False)
+    if merged.returncode not in (0, 1):
+        merged.check_returncode()
     return merged, git("diff", "--name-only", "--diff-filter=U").splitlines()
 
 
@@ -152,7 +169,7 @@ def prepare(context):
         review_outcome(context, pending["html_url"])
         return
     resolver = conflict_resolver.Resolver(task=f"{repo}:{base}:{upstream}")
-    assert_history(state["commit"], upstream, base)
+    explicit_base = release_merge_base(state["commit"], upstream, base)
     branch = f"upstream/{tag}-{base[:12]}"
     next_state = {"repository": UPSTREAM, "tag": tag, "commit": upstream}
     existing = git("ls-remote", "--heads", "origin", f"refs/heads/{branch}")
@@ -170,12 +187,13 @@ def prepare(context):
         run("python3", ".github/scripts/check-fork-invariants.py")
         head = previous
     else:
-        merged_gradle = merge_app_version(base, upstream, tag, state["tag"], allow_conflicts=resolver.enabled)
+        merged_gradle = merge_app_version(base, upstream, tag, state["tag"],
+                                          allow_conflicts=resolver.enabled, explicit_base=explicit_base)
         git("switch", "-c", branch)
         git("config", "user.name", "github-actions[bot]")
         git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
         try:
-            merged, conflicts = merge_upstream(upstream)
+            merged, conflicts = merge_upstream(upstream, explicit_base)
             if merged.returncode and not conflicts:
                 raise RuntimeError(f"Upstream merge failed: {merged.stderr}")
             # Do not hide upstream policy changes by silently retaining ours.

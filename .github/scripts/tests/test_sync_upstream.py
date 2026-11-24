@@ -306,10 +306,61 @@ class MergeTests(unittest.TestCase):
         client.assess_update.assert_called_once()
         self.assertEqual(sync.release_versions.version_info(gradle.read_text()), ("1.7.129", 831))
 
-    def test_history_divergence_requires_review(self):
+    def record_sibling_release(self, change_release_tree=False):
+        self.git("switch", "-c", "previous-release", self.initial)
+        if change_release_tree:
+            Path("docs/guide.md").write_text("previous release guide\n")
+            Path("obsolete.txt").write_text("previous release only\n")
+            with Path(sync.VERSION_FILE).open("a") as gradle:
+                gradle.write("// previous release only\n")
+            self.commit("release-only changes")
+        else:
+            self.git("commit", "--allow-empty", "-m", "tag previous release snapshot")
+        previous = self.git("rev-parse", "HEAD")
+        self.git("switch", "dev")
+        self.git("merge", "--no-edit", previous)
+        state = json.loads(sync.STATE.read_text())
+        sync.STATE.write_text(json.dumps({**state, "commit": previous}))
+        self.commit("record previous release")
+        self.git("push", "origin", "dev")
+        return previous
+
+    def test_new_release_after_equivalent_sibling_snapshot(self):
+        self.record_sibling_release()
+        base = self.git("rev-parse", "HEAD")
+        self.invoke()
+        self.assertEqual(self.git("show", "-s", "--format=%P", "HEAD"), f"{base} {self.target}")
+        self.assertEqual(Path("docs/guide.md").read_text(), "upstream update\n")
+        self.assertEqual(Path("fork.txt").read_text(), "keep me\n")
+        self.assertIn("changed=true", (self.root / "outputs").read_text())
+
+    def test_divergent_release_uses_recorded_tree_and_sends_real_conflict_to_codex(self):
+        previous = self.record_sibling_release(change_release_tree=True)
+        Path("docs/guide.md").write_text("fork guide\n")
+        self.commit("customize fork guide")
+        self.git("push", "origin", "dev")
+        base = self.git("rev-parse", "HEAD")
+        client = Mock(enabled=True)
+        def repair(conflicts, overview):
+            self.assertEqual([path for path, _ in conflicts], ["docs/guide.md"])
+            self.assertEqual(self.git("show", ":1:docs/guide.md"), self.git("show", f"{previous}:docs/guide.md"))
+            self.assertIn("previous release guide", conflicts[0][1])
+            Path("docs/guide.md").write_text("combined guide\n")
+            return ["docs/guide.md"]
+        client.repair_update.side_effect = repair
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
+        client.repair_update.assert_called_once()
+        client.assess_update.assert_called_once()
+        self.assertEqual(self.git("show", "-s", "--format=%P", "HEAD"), f"{base} {self.target}")
+        self.assertFalse(Path("obsolete.txt").exists())
+        self.assertNotIn("previous release only", Path(sync.VERSION_FILE).read_text())
+        self.assertEqual(json.loads(sync.STATE.read_text())["commit"], self.target)
+
+    def test_older_release_commit_requires_review(self):
         self.git("fetch", str(self.root / "upstream"), "dev")
-        with self.assertRaisesRegex(RuntimeError, "history diverged"):
-            sync.assert_history(self.target, self.initial, self.target)
+        with self.assertRaisesRegex(RuntimeError, "already in dev history"):
+            sync.release_merge_base(self.target, self.initial, self.target)
 
     def test_modified_candidate_is_rejected_before_reuse(self):
         self.invoke()
@@ -333,7 +384,7 @@ class MergeTests(unittest.TestCase):
         client.state.data = {"repairs": {}}
         with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
             self.invoke()
-            self.assertIn("history diverged", self.record_review.call_args.args[4])
+            self.assertIn("no common history", self.record_review.call_args.args[4])
         client.resolve.assert_not_called()
         self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
         self.assertIn("review_required=true", (self.root / "outputs").read_text())
