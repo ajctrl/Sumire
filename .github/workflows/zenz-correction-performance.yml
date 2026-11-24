@@ -13,6 +13,17 @@ on:
         default: '["time0","time1","time2","memory","runtime","feature"]'
         required: true
         type: string
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      baseline_ref:
+        required: true
+        type: string
+      phases:
+        type: string
+        default: '["time0","time1","time2","memory","runtime","feature"]'
   pull_request:
     branches: [dev]
     paths:
@@ -28,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: zenz-correction-performance-${{ github.event.pull_request.number || github.ref }}-${{ inputs.phases || 'all' }}
+  group: zenz-correction-performance-${{ inputs.ref || github.event.pull_request.number || github.ref }}-${{ inputs.phases || 'all' }}
   cancel-in-progress: true
 
 jobs:
@@ -42,7 +53,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
           fetch-depth: 0
           submodules: recursive
       - name: Prepare external artifact paths
@@ -70,7 +82,7 @@ jobs:
           path: ${{ env.ZENZ_MODEL_CACHE_DIR }}
           key: ${{ runner.os }}-zenz-model-v2-4f5423f0fad41a73b1242eb96fe5c12ae4fdca83-Q5_K_M-ggml-model-Q5_K_M.gguf
       - name: Select a matching upstream baseline for release syncs
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || inputs.ref != ''
         run: |
           python3 .github/scripts/zenz-performance-baseline.py "$ZENZ_PERF_BASELINE_REF" >> "$GITHUB_ENV"
       - name: Build and validate both revisions
@@ -104,7 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Prepare external artifact paths
         run: |
           echo "ZENZ_PERF_ARTIFACT_DIR=$RUNNER_TEMP/zenz-correction-artifacts" >> "$GITHUB_ENV"
