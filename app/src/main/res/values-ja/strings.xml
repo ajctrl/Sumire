@@ -779,10 +779,17 @@
     <string name="editor_cycle_target">挿入方向切替</string>
     <string name="normal_key">通常キー</string>
     <string name="special_key">特別なキー</string>
+    <string name="mixed_key">混在キー</string>
+    <string name="mixed_flick_unassigned">未設定</string>
+    <string name="mixed_flick_text">文字入力</string>
+    <string name="mixed_flick_action">特殊アクション</string>
     <string name="key_label">キーの表示ラベル</string>
     <string name="key_action">キーのアクション</string>
     <string name="double_tap_action">ダブルタップのアクション</string>
     <string name="double_tap_disabled">なし</string>
+    <string name="custom_key_long_press_action">長押しアクション</string>
+    <string name="custom_key_long_press_disabled">なし</string>
+    <string name="custom_key_long_press_priority">アクションを割り当てると、このキーの長押しではそのアクションが優先されます。</string>
     <string name="special_key_category_input">入力・変換</string>
     <string name="special_key_category_delete_cursor">削除・カーソル</string>
     <string name="special_key_category_text_mode">文字種・入力モード</string>
@@ -1400,6 +1407,9 @@
     <string name="done_text">完了</string>
     <string name="qwerty_button_size_preference_title">キーのサイズ</string>
     <string name="qwerty_button_size_preference_summary">キー、文字、特殊キーのアイコンサイズを変更します</string>
+    <string name="flick_popup_position_title">フリックポップアップの位置</string>
+    <string name="flick_popup_position_around_key">キーの周り</string>
+    <string name="flick_popup_position_above_key">キーの上</string>
     <string name="show_flick_key_popup_title">フリック時にポップアップを表示</string>
     <string name="show_long_press_key_popup_title">長押し時にポップアップを表示</string>
     <string name="tenkey_popup_view_style_preference_title">タップ・フリック PopupView のサイズ</string>

@@ -47,5 +47,9 @@ data class KeyDefinition(
     val doubleTapPolicy: String? = null,
     val textInputBehavior: String = KeyTextInputBehavior.NORMAL.dbValue,
     val popupMapConfigJson: String? = null,
-    val qwertyConfigJson: String? = null
+    val qwertyConfigJson: String? = null,
+    val longPressAction: String? = null
 )
+
+internal val KeyDefinition.specialKeyLongPressAction: String?
+    get() = longPressAction.takeIf { isSpecialKey }

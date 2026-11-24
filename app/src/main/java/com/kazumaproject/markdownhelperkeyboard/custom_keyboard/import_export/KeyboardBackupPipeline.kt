@@ -327,6 +327,17 @@ object KeyboardBackupNormalizer {
                 warnings = warnings
             )
             val isSpecialKey = keyDto.isSpecialKey ?: false
+            val normalizedLongPressAction = if (isSpecialKey) {
+                remapKeyAction(
+                    action = keyDto.longPressAction,
+                    stableIdsByOldLayoutId = stableIdsByOldLayoutId,
+                    layoutIndex = layoutIndex,
+                    keyIndex = keyIndex,
+                    warnings = warnings
+                )
+            } else {
+                null
+            }
             val normalizedDoubleTapAction = when {
                 !isSpecialKey -> null
                 keyDto.doubleTapEnabled == false -> null
@@ -377,6 +388,7 @@ object KeyboardBackupNormalizer {
                 ),
                 keyIdentifier = identifier,
                 action = normalizedTapAction,
+                longPressAction = normalizedLongPressAction,
                 rowUnits = keyDto.rowUnits?.coerceAtLeast(0),
                 columnUnits = keyDto.columnUnits?.coerceAtLeast(0),
                 rowSpanUnits = keyDto.rowSpanUnits?.coerceAtLeast(1),

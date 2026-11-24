@@ -54,6 +54,7 @@ import com.kazumaproject.custom_keyboard.data.SpecialKeyColorStyle
 import com.kazumaproject.custom_keyboard.data.automaticDoubleTapPolicy
 import com.kazumaproject.custom_keyboard.data.compatibleColumnSpan
 import com.kazumaproject.custom_keyboard.data.compatibleRowSpan
+import com.kazumaproject.custom_keyboard.data.effectiveLongPressAction
 import com.kazumaproject.custom_keyboard.data.toCircularFlickMap
 import com.kazumaproject.custom_keyboard.data.toCellSpanCeilFromGridUnits
 import com.kazumaproject.custom_keyboard.data.usesFlexiblePlacement
@@ -97,6 +98,13 @@ private data class CustomKeyboardTargetOption(
 @AndroidEntryPoint
 class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
 
+    private companion object {
+        const val STATE_EDITING_KEY = "editingKeyIdentifier"
+        const val STATE_LONG_PRESS_ACTION = "longPressAction"
+        const val STATE_KEY_TYPE = "editingKeyType"
+        const val STATE_MIXED_FLICK = "mixedFlickDraft"
+    }
+
     @Inject
     lateinit var keyboardRepository: KeyboardRepository
 
@@ -124,6 +132,8 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private var currentFlickLongPressItems = mutableListOf<FlickLongPressMappingItem>()
     private var currentFlickLongPressHoldItems = mutableListOf<FlickLongPressMappingItem>()
     private var currentSpecialFlickItems = mutableListOf<SpecialFlickMappingItem>()
+    private var mixedFlickDraft: MixedFlickEditorState? = null
+    private var updatingMixedFlickSlotType = false
     private var currentCircularFlickMaps = mutableListOf<MutableList<CircularFlickMappingItem>>()
     private var currentCircularMapIndex = 0
     private var outputEditMode: OutputEditMode = OutputEditMode.NORMAL
@@ -136,7 +146,9 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private lateinit var keyActionOptions: List<SpecialKeyActionOption>
     private lateinit var specialFlickActionOptions: List<SpecialKeyActionOption>
     private lateinit var customKeyboardTargetAdapter: ArrayAdapter<String>
+    private lateinit var mixedFlickTargetAdapter: ArrayAdapter<String>
     private lateinit var doubleTapTargetAdapter: ArrayAdapter<String>
+    private lateinit var longPressTargetAdapter: ArrayAdapter<String>
     private lateinit var circularFlickAdapter: CircularFlickMappingAdapter
     private lateinit var circularMapAdapter: ArrayAdapter<String>
 
@@ -147,6 +159,11 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private var customKeyboardTargetOptions: List<CustomKeyboardTargetOption> = emptyList()
     private var selectedTargetCustomKeyboardStableId: String? = null
     private var selectedDoubleTapTargetStableId: String? = null
+    private var longPressAction: KeyAction? = null
+    private val isEditingSpecialKey: Boolean
+        get() = _binding?.keyTypeChipGroup?.checkedChipId == R.id.chip_special
+    private val selectedLongPressAction: KeyAction?
+        get() = longPressAction.takeIf { isEditingSpecialKey }
     private var selectedIconRef: KeyIconRef? = null
     private var originalIconRef: KeyIconRef? = null
     private val pendingUserIconPaths = mutableSetOf<String>()
@@ -161,15 +178,6 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private var currentRowSpanUnits: Int = 2
     private var maxColumnSpanUnits: Int = 2
     private var maxRowSpanUnits: Int = 2
-
-    // NEW: allowed directions for special-flick category (5 directions)
-    private val allowedSpecialFlickDirections: List<FlickDirection> = listOf(
-        FlickDirection.TAP,
-        FlickDirection.UP,
-        FlickDirection.DOWN,
-        FlickDirection.UP_LEFT,
-        FlickDirection.UP_RIGHT
-    )
 
     private val flickLongPressDirections: List<TfbiFlickDirection> = listOf(
         TfbiFlickDirection.TAP,
@@ -188,7 +196,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         _binding = FragmentKeyEditorBinding.bind(view)
 
         binding.buttonDone.isEnabled = false
-        restoredEditingKeyIdentifier = savedInstanceState?.getString("qwertyEditingKey")
+        restoredEditingKeyIdentifier = savedInstanceState?.getString(STATE_EDITING_KEY)
         savedQwertyDraft = QwertyKeyConfigCodec.decode(savedInstanceState?.getString("qwertyDraft"), requireOutput = false)
         binding.qwertyKeyEditor.onChanged = { updateDoneButtonState() }
         freeFlickDraft = PopupKeyConfigCodec.decode(savedInstanceState?.getString("freeFlickDraft")) ?: freeFlickDraft
@@ -204,7 +212,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         setupToolbarAndMenu()
         setupGridEditor()
         setupUIListeners()
-        setupInitialState()
+        setupInitialState(savedInstanceState)
     }
 
     private fun setupGridEditor() {
@@ -232,6 +240,24 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             false
         )
 
+        val longPressActionOptions =
+            listOf(SpecialKeyActionOption(getString(R.string.custom_key_long_press_disabled))) + keyActionOptions
+        binding.longPressActionSpinner.setAdapter(
+            SpecialKeyActionDropdownAdapter(requireContext(), longPressActionOptions)
+        )
+        binding.longPressActionSpinner.setOnItemClickListener { _, _, position, _ ->
+            val option = longPressActionOptions.getOrNull(position) ?: return@setOnItemClickListener
+            val selectedAction = option.action?.action
+            updateLongPressAction(
+                if (selectedAction is KeyAction.MoveToCustomKeyboard) {
+                    longPressAction as? KeyAction.MoveToCustomKeyboard
+                        ?: KeyAction.MoveToCustomKeyboard(customKeyboardTargets.firstOrNull()?.stableId.orEmpty())
+                } else {
+                    selectedAction
+                }
+            )
+        }
+
         // 特殊フリック用アクションスピナー（セル選択後に表示）
         binding.specialFlickMappingsRecyclerView.setAdapter(
             SpecialKeyActionDropdownAdapter(requireContext(), specialFlickActionOptions)
@@ -243,12 +269,29 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             mutableListOf<String>()
         )
         binding.customKeyboardTargetSpinner.setAdapter(customKeyboardTargetAdapter)
+        mixedFlickTargetAdapter = ArrayAdapter(
+            requireContext(),
+            android.R.layout.simple_spinner_dropdown_item,
+            mutableListOf<String>()
+        )
+        binding.mixedFlickTargetSpinner.setAdapter(mixedFlickTargetAdapter)
         doubleTapTargetAdapter = ArrayAdapter(
             requireContext(),
             android.R.layout.simple_spinner_dropdown_item,
             mutableListOf<String>()
         )
         binding.doubleTapTargetSpinner.setAdapter(doubleTapTargetAdapter)
+        longPressTargetAdapter = ArrayAdapter(
+            requireContext(),
+            android.R.layout.simple_spinner_dropdown_item,
+            mutableListOf<String>()
+        )
+        binding.longPressTargetSpinner.setAdapter(longPressTargetAdapter)
+        binding.longPressTargetSpinner.setOnItemClickListener { _, _, position, _ ->
+            customKeyboardTargets.getOrNull(position)?.let { target ->
+                updateLongPressAction(KeyAction.MoveToCustomKeyboard(target.stableId))
+            }
+        }
 
         circularFlickAdapter = CircularFlickMappingAdapter { updated ->
             val currentMap = currentCircularFlickMaps.getOrNull(currentCircularMapIndex)
@@ -307,15 +350,32 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                     binding.flickGridEditorView.updateCellLabel(mode, text)
                     updateDoneButtonState()
                 }
-                else -> Unit
+                is CellMode.SpecialFlick -> {
+                    if (isEditingMixedFlick() && mixedFlickDraft?.slots?.get(mode.direction) is MixedFlickSlot.Text) {
+                        setMixedFlickSlot(mode, MixedFlickSlot.Text(text))
+                    }
+                }
             }
         }
 
         // 特殊フリック用アクション選択コールバック
         binding.specialFlickMappingsRecyclerView.setOnItemClickListener { _, _, idx, _ ->
             val mode = currentCellMode as? CellMode.SpecialFlick ?: return@setOnItemClickListener
+            val option = specialFlickActionOptions.getOrNull(idx) ?: return@setOnItemClickListener
+            if (isEditingMixedFlick()) {
+                val currentAction = (mixedFlickDraft?.slots?.get(mode.direction) as? MixedFlickSlot.Action)?.action
+                val action = resolveSpecialFlickSelectedAction(
+                    selectedAction = option.action?.action,
+                    currentAction = currentAction,
+                    selectedTargetStableId = null,
+                    validTargetStableIds = validTargetStableIds()
+                )
+                setMixedFlickSlot(mode, MixedFlickSlot.Action(action))
+                showMixedFlickSlot(mode)
+                return@setOnItemClickListener
+            }
             val item = currentSpecialFlickItems.firstOrNull { it.direction == mode.direction }
-            val selectedAction = specialFlickActionOptions.getOrNull(idx)?.action?.let {
+            val selectedAction = option.action?.let {
                 resolveSpecialFlickSelectedAction(
                     selectedAction = it.action,
                     currentAction = item?.action,
@@ -346,60 +406,54 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         binding.buttonDone.setOnClickListener { onDone() }
 
         binding.keyTypeChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
-            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
-            val selectedChipId = checkedIds.first()
-            val isSpecialKey = selectedChipId == R.id.chip_special
-
-            // Special key: show category selector (single/flick)
-            binding.textSpecialCategoryTitle.isVisible = isSpecialKey
-            binding.specialCategoryChipGroup.isVisible = isSpecialKey
-            updateSpecialKeyColorStyleVisibility(isSpecialKey)
-
-            // Normal UI blocks
-            binding.textInputStyleTitle.isVisible = !isSpecialKey
-            binding.inputStyleChipGroup.isVisible = !isSpecialKey
-            binding.textOutputModeTitle.isVisible = !isSpecialKey
-            binding.outputModeChipGroup.isVisible = !isSpecialKey
-
-            if (isSpecialKey) {
-                binding.editFreeFlickMap.isVisible = false
-                // Default category = single if none selected yet
-                if (binding.specialCategoryChipGroup.checkedChipId == View.NO_ID) {
-                    binding.specialCategoryChipGroup.check(R.id.chip_special_single)
-                }
-
-                // hide normal editors
-                binding.keyLabelLayout.isVisible = false
-                binding.flickGridEditorView.isVisible = false
-                binding.textSelectedDirection.isVisible = false
-                binding.textCharInputLayout.isVisible = false
-
-                // show the right special editor
-                handleSpecialCategoryUi()
+            updateLongPressControlsVisibility()
+            val selectedChipId = checkedIds.firstOrNull()
+            if (selectedChipId == null) {
+                updateDoneButtonState()
             } else {
-                // hide special editors
-                binding.keyActionLayout.isVisible = false
-                binding.customKeyboardTargetLayout.isVisible = false
-                binding.specialFlickEditorGroup.isVisible = false
-                updateSpecialKeyColorStyleVisibility(false)
-
-                // normal key: input style controls which editor is visible
-                handleInputStyleUi()
+                showKeyTypeEditor(selectedChipId)
             }
+        }
 
-            updateDoubleTapControlsVisibility()
-            updateDoneButtonState()
+        binding.mixedFlickSlotTypeGroup.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (updatingMixedFlickSlotType || !isEditingMixedFlick()) return@setOnCheckedStateChangeListener
+            val mode = currentCellMode as? CellMode.SpecialFlick ?: return@setOnCheckedStateChangeListener
+            val slot = when (checkedIds.firstOrNull()) {
+                R.id.chip_mixed_text -> MixedFlickSlot.Text()
+                R.id.chip_mixed_action -> MixedFlickSlot.Action()
+                R.id.chip_mixed_unassigned -> MixedFlickSlot.Unassigned
+                else -> return@setOnCheckedStateChangeListener
+            }
+            setMixedFlickSlot(mode, slot)
+            showMixedFlickSlot(mode)
+        }
+
+        binding.mixedKeyLabelEdittext.doAfterTextChanged { text ->
+            mixedFlickDraft?.label = text?.toString().orEmpty()
+        }
+
+        binding.mixedFlickTargetSpinner.setOnItemClickListener { _, _, position, _ ->
+            if (!isEditingMixedFlick()) return@setOnItemClickListener
+            val mode = currentCellMode as? CellMode.SpecialFlick ?: return@setOnItemClickListener
+            val target = customKeyboardTargetOptions.getOrNull(position)
+                ?.takeIf { it.isValid } ?: return@setOnItemClickListener
+            setMixedFlickSlot(mode, MixedFlickSlot.Action(KeyAction.MoveToCustomKeyboard(target.stableId)))
+            showMixedFlickSlot(mode)
         }
 
         // NEW: category change for special key
         binding.specialCategoryChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
-            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+            if (checkedIds.isEmpty() || binding.keyTypeChipGroup.checkedChipId != R.id.chip_special) {
+                return@setOnCheckedStateChangeListener
+            }
             handleSpecialCategoryUi()
             updateDoneButtonState()
         }
 
         binding.inputStyleChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
-            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+            if (checkedIds.isEmpty() || binding.keyTypeChipGroup.checkedChipId != R.id.chip_normal) {
+                return@setOnCheckedStateChangeListener
+            }
             val isPetal = checkedIds.first() == R.id.chip_petal_flick
             binding.chipToggleOutput.isEnabled = isPetal
             if (!isPetal && outputEditMode == OutputEditMode.TOGGLE) {
@@ -447,7 +501,9 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         }
 
         binding.outputModeChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
-            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+            if (checkedIds.isEmpty() || binding.keyTypeChipGroup.checkedChipId != R.id.chip_normal) {
+                return@setOnCheckedStateChangeListener
+            }
             outputEditMode = when (checkedIds.first()) {
                 R.id.chip_toggle_output -> OutputEditMode.TOGGLE
                 R.id.chip_long_press_output -> OutputEditMode.LONG_PRESS
@@ -586,6 +642,111 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         }
     }
 
+    private fun showKeyTypeEditor(chipId: Int) {
+        val isNormal = chipId == R.id.chip_normal
+        val isSpecial = chipId == R.id.chip_special
+        val isMixed = chipId == R.id.chip_mixed
+        binding.textSpecialCategoryTitle.isVisible = isSpecial
+        binding.specialCategoryChipGroup.isVisible = isSpecial
+        updateSpecialKeyColorStyleVisibility(isSpecial)
+
+        binding.textInputStyleTitle.isVisible = isNormal
+        binding.inputStyleChipGroup.isVisible = isNormal
+        binding.textOutputModeTitle.isVisible = isNormal
+        binding.outputModeChipGroup.isVisible = isNormal
+
+        binding.mixedKeyLabelLayout.isVisible = isMixed
+        binding.mixedFlickSlotTypeGroup.isVisible = isMixed
+        binding.mixedFlickTargetLayout.isVisible = false
+        binding.textCharEdittext.isSaveEnabled = !isMixed
+        binding.specialFlickMappingsRecyclerView.isSaveEnabled = !isMixed
+
+        binding.keyActionLayout.isVisible = false
+        binding.customKeyboardTargetLayout.isVisible = false
+        binding.specialFlickEditorGroup.isVisible = false
+        binding.circularFlickEditorGroup.isVisible = false
+        binding.editFreeFlickMap.isVisible = false
+
+        when (chipId) {
+            R.id.chip_normal -> handleInputStyleUi()
+            R.id.chip_special -> {
+                if (binding.specialCategoryChipGroup.checkedChipId == View.NO_ID) {
+                    binding.specialCategoryChipGroup.check(R.id.chip_special_single)
+                }
+                handleSpecialCategoryUi()
+            }
+            R.id.chip_mixed -> showMixedFlickEditor()
+        }
+
+        updateDoubleTapControlsVisibility()
+        updateDoneButtonState()
+    }
+
+    private fun isEditingMixedFlick(): Boolean =
+        binding.keyTypeChipGroup.checkedChipId == R.id.chip_mixed
+
+    private fun showMixedFlickEditor() {
+        val draft = mixedFlickDraft ?: return
+        binding.qwertyKeyEditor.isVisible = false
+        binding.keyLabelLayout.isVisible = false
+        binding.flickGridEditorView.isVisible = true
+        updateIconOverrideVisibility()
+
+        binding.mixedKeyLabelEdittext.setText(draft.label)
+        binding.flickGridEditorView.setSpecialFlickContent(emptyList(), specialFlickDisplayActions)
+        draft.slots.forEach { (direction, slot) ->
+            updateMixedFlickCell(CellMode.SpecialFlick(direction), slot)
+        }
+        val mode = CellMode.SpecialFlick(draft.selectedDirection)
+        binding.flickGridEditorView.setSelectedMode(mode)
+        currentCellMode = mode
+        showEditorForMode(mode)
+    }
+
+    private fun showMixedFlickSlot(mode: CellMode.SpecialFlick) {
+        val draft = mixedFlickDraft ?: return
+        draft.selectedDirection = mode.direction
+        val slot = draft.slots[mode.direction] ?: MixedFlickSlot.Unassigned
+        updatingMixedFlickSlotType = true
+        binding.mixedFlickSlotTypeGroup.check(
+            when (slot) {
+                MixedFlickSlot.Unassigned -> R.id.chip_mixed_unassigned
+                is MixedFlickSlot.Text -> R.id.chip_mixed_text
+                is MixedFlickSlot.Action -> R.id.chip_mixed_action
+            }
+        )
+        updatingMixedFlickSlotType = false
+
+        binding.textCharInputLayout.isVisible = slot is MixedFlickSlot.Text
+        binding.textCharInputLayout.hint = getString(R.string.two_step_output_label)
+        binding.specialFlickEditorGroup.isVisible = slot is MixedFlickSlot.Action
+        if (slot is MixedFlickSlot.Text) setCharEditorValue(slot.output)
+
+        val action = (slot as? MixedFlickSlot.Action)?.action
+        val actionLabel = action?.let(::displayActionForAction)?.displayName.orEmpty()
+        binding.specialFlickMappingsRecyclerView.setText(actionLabel, false)
+
+        val targetId = (action as? KeyAction.MoveToCustomKeyboard)?.stableId
+        binding.mixedFlickTargetLayout.isVisible = targetId != null
+        val targetLabel = targetId?.takeIf(String::isNotEmpty)?.let { id ->
+            customKeyboardTargetOptions.firstOrNull { it.stableId == id }?.label
+                ?: getString(R.string.deleted_custom_keyboard_target)
+        }
+        binding.mixedFlickTargetSpinner.setText(targetLabel.orEmpty(), false)
+    }
+
+    private fun setMixedFlickSlot(mode: CellMode.SpecialFlick, slot: MixedFlickSlot) {
+        mixedFlickDraft?.slots?.set(mode.direction, slot)
+        updateMixedFlickCell(mode, slot)
+        updateDoneButtonState()
+    }
+
+    private fun updateMixedFlickCell(mode: CellMode.SpecialFlick, slot: MixedFlickSlot) {
+        val displayAction = (slot as? MixedFlickSlot.Action)?.action?.let(::displayActionForAction)
+        val label = (slot as? MixedFlickSlot.Text)?.output ?: displayAction?.displayName.orEmpty()
+        binding.flickGridEditorView.updateCellIcon(mode, displayAction?.iconResId, label)
+    }
+
     private fun handleSpecialCategoryUi() {
         binding.qwertyKeyEditor.isVisible = false
         val isFlick = binding.specialCategoryChipGroup.checkedChipId == R.id.chip_special_flick
@@ -602,7 +763,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
 
         if (isFlick) {
             if (currentSpecialFlickItems.isEmpty()) {
-                currentSpecialFlickItems = allowedSpecialFlickDirections
+                currentSpecialFlickItems = specialFlickDirections
                     .map { dir -> SpecialFlickMappingItem(direction = dir, action = null) }
                     .toMutableList()
             }
@@ -872,6 +1033,10 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 setCharEditorValue(value)
             }
             is CellMode.SpecialFlick -> {
+                if (isEditingMixedFlick()) {
+                    showMixedFlickSlot(mode)
+                    return
+                }
                 val currentAction = currentSpecialFlickItems
                     .firstOrNull { it.direction == mode.direction }?.action
                 val currentName = currentAction?.let { act ->
@@ -1056,16 +1221,43 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     private suspend fun loadCustomKeyboardTargets() {
         customKeyboardTargets = keyboardRepository.getLayoutsNotFlowEnsuringStableIds()
         refreshCustomKeyboardTargetOptions()
+        longPressTargetAdapter.addAll(customKeyboardTargetOptions.map { it.label })
     }
 
     private fun refreshCustomKeyboardTargetOptions(deletedStableId: String? = null) {
         customKeyboardTargetOptions = buildTargetOptions(customKeyboardTargets, deletedStableId)
-        customKeyboardTargetAdapter.clear()
-        customKeyboardTargetAdapter.addAll(customKeyboardTargetOptions.map { it.label })
-        customKeyboardTargetAdapter.notifyDataSetChanged()
-        doubleTapTargetAdapter.clear()
-        doubleTapTargetAdapter.addAll(customKeyboardTargetOptions.map { it.label })
-        doubleTapTargetAdapter.notifyDataSetChanged()
+        val labels = customKeyboardTargetOptions.map { it.label }
+        for (adapter in listOf(customKeyboardTargetAdapter, doubleTapTargetAdapter, mixedFlickTargetAdapter)) {
+            adapter.clear()
+            adapter.addAll(labels)
+            adapter.notifyDataSetChanged()
+        }
+    }
+
+    private fun updateLongPressAction(action: KeyAction?) {
+        longPressAction = action
+        val actionLabel = action?.let {
+            displayActionForAction(it)?.displayName ?: KeyActionMapper.fromKeyAction(it)
+        }
+        binding.longPressActionSpinner.setText(
+            actionLabel ?: getString(R.string.custom_key_long_press_disabled), false
+        )
+        binding.longPressActionLayout.helperText = action?.let {
+            getString(R.string.custom_key_long_press_priority)
+        }
+        val targetId = (action as? KeyAction.MoveToCustomKeyboard)?.stableId
+        val targetLabel = targetId?.takeIf { it.isNotBlank() }?.let { id ->
+            customKeyboardTargetOptions.firstOrNull { it.stableId == id }?.label
+                ?: getString(R.string.deleted_custom_keyboard_target)
+        }
+        binding.longPressTargetSpinner.setText(targetLabel.orEmpty(), false)
+        updateLongPressControlsVisibility()
+        updateDoneButtonState()
+    }
+
+    private fun updateLongPressControlsVisibility() {
+        binding.longPressActionLayout.isVisible = isEditingSpecialKey
+        binding.longPressTargetLayout.isVisible = selectedLongPressAction is KeyAction.MoveToCustomKeyboard
     }
 
     private fun selectTargetCustomKeyboard(stableId: String?) {
@@ -1177,8 +1369,12 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
     }
 
     private fun updateDoneButtonState() {
-        if (outputEditMode != OutputEditMode.TOGGLE) {
+        if (outputEditMode != OutputEditMode.TOGGLE || isEditingMixedFlick()) {
             binding.textCharInputLayout.error = null
+        }
+        if (!selectedLongPressAction.isValidMoveToCustomKeyboardTarget(validTargetStableIds())) {
+            binding.buttonDone.isEnabled = false
+            return
         }
         if (binding.keyTypeChipGroup.checkedChipId == R.id.chip_normal &&
             binding.inputStyleChipGroup.checkedChipId == R.id.chip_free_flick) {
@@ -1194,6 +1390,8 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             return
         }
         val isEnabled = when (binding.keyTypeChipGroup.checkedChipId) {
+            R.id.chip_mixed -> mixedFlickDraft?.canSave(validTargetStableIds()) == true
+
             R.id.chip_special -> {
                 val isFlick =
                     binding.specialCategoryChipGroup.checkedChipId == R.id.chip_special_flick
@@ -1277,7 +1475,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         binding.buttonDone.isEnabled = isEnabled && isDoubleTapValid
     }
 
-    private fun setupInitialState() {
+    private fun setupInitialState(savedInstanceState: Bundle?) {
         viewLifecycleOwner.lifecycleScope.launch {
             loadCustomKeyboardTargets()
             val state = viewModel.uiState.filterNotNull().first()
@@ -1286,7 +1484,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             // legacy KeyData.keyId. selectedKeyIdentifier carries item.id for
             // flexible layouts (so half-cell keys and editor-created keys
             // resolve correctly even when keyData.keyId is null/blank).
-            val selectedId = state.selectedKeyIdentifier ?: restoredEditingKeyIdentifier.takeIf { savedQwertyDraft != null || freeFlickDraft != null }
+            val selectedId = state.selectedKeyIdentifier ?: restoredEditingKeyIdentifier
             editingKeyIdentifier = selectedId
             val selectedKeyItem = selectedId?.let { id ->
                 state.layout.items
@@ -1306,6 +1504,22 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
             }
 
             val key = currentKeyData!!
+            val savedKeyState = savedInstanceState?.takeIf { selectedId == restoredEditingKeyIdentifier }
+            val savedLongPress = savedKeyState?.takeIf {
+                key.isSpecialKey && it.containsKey(STATE_LONG_PRESS_ACTION)
+            }
+            val flickMapForMixed = state.layout.flickKeyMaps[key.keyId]?.firstOrNull()
+                ?: state.layout.flickKeyMaps[key.label]?.firstOrNull().orEmpty()
+            mixedFlickDraft = savedKeyState?.getBundle(STATE_MIXED_FLICK)?.let(MixedFlickEditorState::fromBundle)
+                ?: MixedFlickEditorState.fromKey(key, flickMapForMixed)
+            val savedAction = savedLongPress?.getString(STATE_LONG_PRESS_ACTION)
+            updateLongPressAction(
+                when {
+                    savedLongPress == null -> key.effectiveLongPressAction
+                    savedAction == "" -> KeyAction.MoveToCustomKeyboard("")
+                    else -> KeyActionMapper.toKeyAction(savedAction)
+                }
+            )
             selectedIconRef = key.icon?.takeIf { it.isOverride() }
             originalIconRef = selectedIconRef
             key.doubleTapBinding
@@ -1362,7 +1576,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 if (isSpecialFlick) {
                     binding.specialCategoryChipGroup.check(R.id.chip_special_flick)
 
-                    currentSpecialFlickItems = allowedSpecialFlickDirections.map { dir ->
+                    currentSpecialFlickItems = specialFlickDirections.map { dir ->
                         val saved = flickMap[dir] as? FlickAction.Action
                         SpecialFlickMappingItem(direction = dir, action = saved?.action)
                     }.toMutableList()
@@ -1501,6 +1715,17 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 handleInputStyleUi()
             }
 
+            val restoredType = savedKeyState?.getInt(STATE_KEY_TYPE, View.NO_ID) ?: View.NO_ID
+            val desiredType = when {
+                restoredType == R.id.chip_mixed -> restoredType
+                key.keyType == KeyType.MIXED_FLICK && restoredType in listOf(R.id.chip_normal, R.id.chip_special) ->
+                    restoredType
+                key.keyType == KeyType.MIXED_FLICK -> R.id.chip_mixed
+                else -> binding.keyTypeChipGroup.checkedChipId
+            }
+            if (desiredType != binding.keyTypeChipGroup.checkedChipId) {
+                binding.keyTypeChipGroup.check(desiredType)
+            }
             updateDoneButtonState()
         }
     }
@@ -1878,6 +2103,8 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
 
     private fun onDone() {
         val originalKey = currentKeyData ?: return
+        val newLongPressAction = selectedLongPressAction
+        if (!newLongPressAction.isValidMoveToCustomKeyboardTarget(validTargetStableIds())) return
 
         if (
             binding.keyTypeChipGroup.checkedChipId == R.id.chip_normal &&
@@ -1903,6 +2130,24 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
         val newDrawableResId: Int?
 
         when (binding.keyTypeChipGroup.checkedChipId) {
+            R.id.chip_mixed -> {
+                val draft = mixedFlickDraft ?: return
+                if (!draft.canSave(validTargetStableIds())) return
+                newKeyType = KeyType.MIXED_FLICK
+                isSpecial = false
+                newLabel = draft.label.trim()
+                newFlickMap = draft.slots.mapNotNull { (direction, slot) ->
+                    slot.toFlickAction()?.let { direction to it }
+                }.toMap()
+                newAction = when (val tap = newFlickMap.getValue(FlickDirection.TAP)) {
+                    is FlickAction.Input -> KeyAction.Text(tap.char)
+                    is FlickAction.Action -> tap.action
+                }
+                newDrawableResId = null
+                newLongPressFlickMap = emptyMap()
+                newTwoStepLongPressMap = emptyMap()
+            }
+
             R.id.chip_special -> {
                 val isFlick =
                     binding.specialCategoryChipGroup.checkedChipId == R.id.chip_special_flick
@@ -1927,18 +2172,6 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                     newLabel =
                         if (newDrawableResId != null) "" else selectedDisplayAction?.displayName
                             ?: "ACTION"
-
-                    if (newAction == KeyAction.VoiceInput) {
-                        val context = requireContext()
-                        val hasPermission = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
-
-                        if (!hasPermission) {
-                            requestRecordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    }
 
                     newFlickMap = emptyMap()
                     newTwoStepMap = emptyMap()
@@ -1985,18 +2218,6 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                             )
                         }
                         .toMap()
-
-                    if (newAction == KeyAction.VoiceInput) {
-                        val context = requireContext()
-                        val hasPermission = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
-
-                        if (!hasPermission) {
-                            requestRecordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    }
 
                     newTwoStepMap = emptyMap()
                     newLongPressFlickMap = emptyMap()
@@ -2167,7 +2388,12 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 )
             )
         }
-        if (newDoubleTapBinding?.action == KeyAction.VoiceInput) {
+        if (newAction == KeyAction.VoiceInput || newDoubleTapBinding?.action == KeyAction.VoiceInput ||
+            newLongPressAction == KeyAction.VoiceInput ||
+            (newKeyType == KeyType.MIXED_FLICK && newFlickMap.values.any {
+                (it as? FlickAction.Action)?.action == KeyAction.VoiceInput
+            })
+        ) {
             val hasPermission = ContextCompat.checkSelfPermission(
                 requireContext(),
                 Manifest.permission.RECORD_AUDIO
@@ -2205,6 +2431,7 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
                 SpecialKeyColorStyle.SPECIAL
             },
             doubleTapBinding = newDoubleTapBinding,
+            longPressAction = newLongPressAction,
             textInputBehavior = if (
                 !isSpecial &&
                 newKeyType == KeyType.PETAL_FLICK &&
@@ -2246,15 +2473,27 @@ class KeyEditorFragment : Fragment(R.layout.fragment_key_editor) {
 
 
     override fun onSaveInstanceState(outState: Bundle) {
+        editingKeyIdentifier?.let {
+            outState.putString(STATE_EDITING_KEY, it)
+            if (isEditingSpecialKey) {
+                outState.putString(
+                    STATE_LONG_PRESS_ACTION,
+                    KeyActionMapper.fromKeyAction(longPressAction)
+                        ?: (longPressAction as? KeyAction.MoveToCustomKeyboard)?.stableId
+                )
+            }
+        }
         freeFlickDraft?.let { outState.putString("freeFlickDraft", PopupKeyConfigCodec.encode(it)) }
+        if (_binding != null) {
+            outState.putInt(STATE_KEY_TYPE, binding.keyTypeChipGroup.checkedChipId)
+            mixedFlickDraft?.let { outState.putBundle(STATE_MIXED_FLICK, it.toBundle()) }
+        }
         if (_binding != null && freeFlickDraft != null) {
-            outState.putString("qwertyEditingKey", editingKeyIdentifier)
             outState.putInt("freeFlickInputStyle", binding.inputStyleChipGroup.checkedChipId)
         }
         if (_binding != null && binding.keyTypeChipGroup.checkedChipId == R.id.chip_normal &&
             binding.inputStyleChipGroup.checkedChipId == R.id.chip_qwerty) {
             outState.putString("qwertyDraft", QwertyKeyConfigCodec.encode(binding.qwertyKeyEditor.config))
-            outState.putString("qwertyEditingKey", editingKeyIdentifier)
         }
         super.onSaveInstanceState(outState)
     }

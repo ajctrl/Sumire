@@ -162,7 +162,7 @@ class KeyboardRepositoryDeleteImpactTest {
     }
 
     @Test
-    fun getDeleteImpactForLayout_referencedByDoubleTapAction_isDetected() = runBlocking {
+    fun getDeleteImpactForLayout_referencedByDoubleTapAndLongPress_isDetected() = runBlocking {
         val targetStableId = "target-via-double-tap"
         val target = layout(layoutId = 15, stableId = targetStableId, name = "Target")
         val source = layout(layoutId = 25, stableId = "source-stable", name = "Source")
@@ -181,7 +181,8 @@ class KeyboardRepositoryDeleteImpactTest {
                         keyIdentifier = "key-source-double",
                         action = "MoveCustomKeyboardTab",
                         doubleTapAction = "MoveToCustomKeyboard:$targetStableId",
-                        doubleTapPolicy = "EXCLUSIVE"
+                        doubleTapPolicy = "EXCLUSIVE",
+                        longPressAction = "MoveToCustomKeyboard:$targetStableId"
                     ),
                     flicks = emptyList(),
                     circularFlicks = emptyList(),
@@ -199,20 +200,19 @@ class KeyboardRepositoryDeleteImpactTest {
         val impact = repository.getDeleteImpactForLayout(15L)
 
         assertTrue(impact.hasReferences)
-        assertEquals("key-source-double", impact.references.single().sourceKeyIdentifier)
+        assertEquals(listOf("key-source-double", "key-source-double"), impact.references.map { it.sourceKeyIdentifier })
     }
 
     @Test
-    fun getDeleteImpactForLayout_noReferences_returnsEmpty() = runBlocking {
+    fun getDeleteImpactForLayout_ignoresOldLongPressActionOnNormalKey() = runBlocking {
         val target = layout(layoutId = 13, stableId = "target-no-ref", name = "Target")
         val targetFull = FullKeyboardLayout(target, emptyList(), emptyList())
+        val textKey = keyWithTextAction(keyId = 230, keyIdentifier = "k1", label = "あ")
         val unrelated = FullKeyboardLayout(
             layout = layout(layoutId = 23, stableId = "stable-unrelated", name = "Unrelated"),
             keysWithFlicks = listOf(
-                keyWithTextAction(
-                    keyId = 230,
-                    keyIdentifier = "k1",
-                    label = "あ"
+                textKey.copy(
+                    key = textKey.key.copy(longPressAction = "MoveToCustomKeyboard:${target.stableId}")
                 )
             ),
             spacers = emptyList()
