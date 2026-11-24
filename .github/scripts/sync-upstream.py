@@ -81,7 +81,7 @@ def release_merge_base(previous, upstream, base):
     return None if common.stdout.strip() == previous else previous
 
 
-def merge_app_version(base, upstream, tag, previous_tag, allow_conflicts=False, explicit_base=None):
+def merge_app_version(base, upstream, tag, previous_tag, explicit_base=None):
     """Merge real Gradle changes normally, handling only release numbers specially."""
     ancestor = explicit_base or git("merge-base", base, upstream)
     original = git("show", f"{ancestor}:{VERSION_FILE}")
@@ -102,7 +102,7 @@ def merge_app_version(base, upstream, tag, previous_tag, allow_conflicts=False, 
             path.write_text(content + "\n")
         merged = run("git", "merge-file", "--diff3", "-L", "fork", "-L", "merge-base", "-L", "upstream", "-p", *map(str, paths), check=False)
     if merged.returncode:
-        if allow_conflicts and 0 < merged.returncode < 128:
+        if 0 < merged.returncode < 128:
             return merged.stdout
         raise RuntimeError("Manual upstream merge required: app/build.gradle has non-version conflicts")
     return release_versions.replace_version_info(
@@ -168,7 +168,8 @@ def prepare(context):
         upstream_review.evidence(pending, base, upstream, pending.get("body") or "Review is pending")
         review_outcome(context, pending["html_url"])
         return
-    resolver = conflict_resolver.Resolver(task=f"{repo}:{base}:{upstream}")
+    task = f"{repo}:{base}:{upstream}"
+    resolver = None
     explicit_base = release_merge_base(state["commit"], upstream, base)
     branch = f"upstream/{tag}-{base[:12]}"
     next_state = {"repository": UPSTREAM, "tag": tag, "commit": upstream}
@@ -179,6 +180,7 @@ def prepare(context):
         git("fetch", "--no-tags", "origin", f"refs/heads/{branch}")
         previous = git("rev-parse", "FETCH_HEAD")
         validation_repair.candidate_depth(SimpleNamespace(**globals()), base, upstream, previous, next_state)
+        resolver = conflict_resolver.Resolver(task=task)
         pending = resolver.state.data["repairs"].get(validation_repair.pending_key(base, previous))
         if pending:
             validation_repair.resume(SimpleNamespace(**globals()), pending["failed_run"], context)
@@ -188,7 +190,7 @@ def prepare(context):
         head = previous
     else:
         merged_gradle = merge_app_version(base, upstream, tag, state["tag"],
-                                          allow_conflicts=resolver.enabled, explicit_base=explicit_base)
+                                          explicit_base=explicit_base)
         git("switch", "-c", branch)
         git("config", "user.name", "github-actions[bot]")
         git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
@@ -205,10 +207,11 @@ def prepare(context):
                 conflicts.append(VERSION_FILE)
             else:
                 git("add", "--", VERSION_FILE)
-            if conflicts and not resolver.enabled:
-                raise RuntimeError(f"Manual upstream merge required:\n{conflicts}")
             prepared = prepare_conflicts(conflicts)
             if prepared:
+                resolver = conflict_resolver.Resolver(task=task)
+                if not resolver.enabled:
+                    raise RuntimeError(f"Manual upstream merge required:\n{conflicts}")
                 overview = {"base": base, "upstream": upstream,
                             "paths": git("diff", "--name-status", "HEAD", "--"),
                             "statistics": git("diff", "--stat", "HEAD", "--"),
@@ -222,7 +225,8 @@ def prepare(context):
             if git("diff", "HEAD", "--", *PROTECTED):
                 raise conflict_resolver.policy.ReviewRequired("Update changes fork automation; manual review required")
             run("python3", ".github/scripts/check-fork-invariants.py")
-            resolver.assess_update(git("diff", "--no-ext-diff", "HEAD", "--"))
+            if resolver is not None:
+                resolver.assess_update(git("diff", "--no-ext-diff", "HEAD", "--"))
             STATE.write_text(json.dumps(next_state, indent=2) + "\n")
             git("add", "--", str(STATE))
             git("commit", "-m", f"Merge upstream {tag}", "-m",
@@ -247,7 +251,8 @@ def prepare(context):
             raise
         head = git("rev-parse", "HEAD")
         git("push", "origin", f"HEAD:refs/heads/{branch}")
-    resolver.finish()
+    if resolver is not None:
+        resolver.finish()
     pulls = api(f"repos/{repo}/pulls?state=all&base={BASE}&head={repo.split('/')[0]}:{branch}")
     if pulls:
         if len(pulls) != 1 or pulls[0]["state"] != "open":

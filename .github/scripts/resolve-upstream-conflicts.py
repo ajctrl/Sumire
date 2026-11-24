@@ -185,7 +185,7 @@ class Resolver:
                                     if c.get("type") == "output_text"))
 
     def assess_update(self, diff):
-        """Review the complete resolved update, even when Git found no conflicts."""
+        """Review the complete candidate after a Codex repair."""
         if not self.enabled:
             policy.stop("complete update", "OPENAI_API_KEY is required for the update risk review")
         key, saved = self.state.entry(self.task, "update-risk-review", diff)
