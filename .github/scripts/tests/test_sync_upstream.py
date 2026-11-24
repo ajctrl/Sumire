@@ -86,7 +86,7 @@ class MergeTests(unittest.TestCase):
         self.addCleanup(record.stop)
         self.real_run = sync.run
         risk = patch.object(sync.conflict_resolver.Resolver, "assess_update")
-        self.risk = risk.start()
+        risk.start()
         self.addCleanup(risk.stop)
 
     def git(self, *args):
@@ -192,7 +192,9 @@ class MergeTests(unittest.TestCase):
         self.commit("manual revision")
         self.git("push", "origin", "dev")
         base = self.git("rev-parse", "HEAD")
-        self.invoke()
+        with patch.object(sync.conflict_resolver, "Resolver") as resolver:
+            self.invoke()
+        resolver.assert_not_called()
         gradle = Path("app/build.gradle").read_text()
         self.assertEqual(sync.release_versions.version_info(gradle), ("1.7.129", 824))
         self.assertIn('// fork configuration', gradle)
@@ -211,7 +213,7 @@ class MergeTests(unittest.TestCase):
         self.commit('fork configuration')
         self.git('push', 'origin', 'dev')
         before = self.git('rev-parse', 'HEAD')
-        with self.assertRaisesRegex(RuntimeError, 'non-version conflicts'):
+        with self.assertRaisesRegex(RuntimeError, 'app/build.gradle'):
             self.invoke()
         self.assertEqual(self.git('rev-parse', 'HEAD'), before)
         self.assertEqual(self.git('status', '--porcelain'), '')
@@ -414,17 +416,23 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(Path("tests/FeatureTest.kt").read_text(), "combined assertions\n")
         client.assess_update.assert_called_once()
 
-    def test_risky_conflict_free_update_stops_before_commit_or_push(self):
-        self.risk.side_effect = RuntimeError("Manual review required: breaking interface")
-        with self.assertRaisesRegex(RuntimeError, "breaking interface"):
+    def test_conflict_free_update_skips_codex_and_requires_full_validation(self):
+        with patch.object(sync.conflict_resolver, "Resolver") as resolver:
             self.invoke()
-        self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assertEqual(self.git("ls-remote", "--heads", "origin", "refs/heads/upstream/*"), "")
+        resolver.assert_not_called()
+        outputs = (self.root / "outputs").read_text()
+        self.assertIn("full_validation=true", outputs)
+        self.assertIn(f"head={self.git('rev-parse', 'HEAD')}", outputs)
 
     def test_review_required_preserves_candidate_patch_and_returns_success(self):
-        self.risk.side_effect = sync.conflict_resolver.policy.ReviewRequired("breaking interface")
-        self.invoke()
+        Path("docs/guide.md").write_text("fork conflicting change\n")
+        self.commit("fork change")
+        self.base = self.git("rev-parse", "HEAD")
+        self.git("push", "origin", "dev")
+        client = Mock(enabled=True)
+        client.repair_update.side_effect = sync.conflict_resolver.policy.ReviewRequired("breaking interface")
+        with patch.object(sync.conflict_resolver, "Resolver", return_value=client):
+            self.invoke()
         self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
         self.assertEqual(self.git("status", "--porcelain"), "")
         outputs = (self.root / "outputs").read_text()

@@ -21,15 +21,14 @@ Actions の **Sync upstream release → Run workflow** でも実行できます�
 - 手動版の後に新しい上流が出た場合、`app/build.gradle` のバージョン名は新しい上流に合わせ、
   `versionCode` は上流値と現在のフォーク値+1の大きい方にします。バージョン番号だけの競合は処理しますが、
   その他のテキスト競合はsol-highで解決し、大きな変更・破壊的な変更は人の確認待ちにします。
-  APIキーがない場合は従来どおり停止して手動確認を求めます。
+  自動解決後に競合がなければ、そのままフォーク整合性チェックと全CI検証へ進みます。
 
 ## APIによる競合解決
 
 `OPENAI_API_KEY` をリポジトリの **Settings → Secrets and variables → Actions → Secrets**
-に登録すると、定期・手動どちらの実行でもCodex CLIを起動します。
-定期実行で上流の更新確認、競合修復、変更全体のリスク確認、ビルド・テスト、自動マージまで進めます。
+に登録すると、テキスト競合が残ったときやCI失敗を修復するときにCodex CLIを使えます。
 モデルが人の判断を必要とした場合は停止します。検証失敗時は別の準備実行で修復し、日次予算切れは一時中断します。進展がない場合や判断が必要な場合は人へ引き継ぎます。
-APIキー未設定では、競合修復も変更全体のリスク確認も通過できません。
+Codexによる修復が必要な場合はAPIキーが必要です。
 手動で修復・再開する場合は **Sync upstream release → Run workflow → dev** で起動します。
 モデルを変更する場合は `.github/scripts/resolve-upstream-conflicts.py` の `DEFAULT_MODEL` 定数を編集します。推論設定はhighを使います。
 公式Codex CLI `0.169.0` をActionsでインストールし、`codex exec` を使います。
