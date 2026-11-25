@@ -9,6 +9,7 @@ import com.kazumaproject.core.ui.geometry.KeyboardGeometryMath
 import android.view.ViewConfiguration
 import android.widget.Button
 import com.kazumaproject.core.data.popup.PopupViewStyle
+import com.kazumaproject.core.ui.skin.AboveKeyFlickPopup
 import com.kazumaproject.core.domain.skin.KeyboardSkinId
 import com.kazumaproject.core.domain.flick.FixedGestureSessionConfigSource
 import com.kazumaproject.core.domain.flick.FlickDirection as CoreFlickDirection
@@ -105,6 +106,7 @@ class CrossFlickInputController(
     }
 
     var listener: CrossFlickListener? = null
+    internal var aboveKeyPopup: AboveKeyFlickPopup? = null
 
     private var popupOverlayHostProvider: (() -> View?)? = null
 
@@ -115,6 +117,7 @@ class CrossFlickInputController(
     private var activeGestureConfig: GestureSessionConfig? = null
 
     private var flickActionMap: Map<FlickDirection, FlickAction> = emptyMap()
+    private var previewsActionText = false
     private var actionDisplayTransform: (FlickAction) -> FlickAction = { it }
     private var textMap: Map<FlickDirection, String> = emptyMap()
     private var longPressTextMap: Map<FlickDirection, String> = emptyMap()
@@ -144,7 +147,7 @@ class CrossFlickInputController(
     private val controllerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var longPressJob: Job? = null
     private var isLongPressMode = false
-    private var isLongPressTriggered = false
+    private var longPressSelection: Pair<KeyAction, FlickDirection>? = null
 
     private var popupColorTheme: FlickPopupColorTheme? = null
     private var inputTextTransform: (String) -> String = { it }
@@ -196,18 +199,21 @@ class CrossFlickInputController(
 
     // コントローラを破棄する。ビューのデタッチやキーボードビューの再構築時に FlickKeyboardView から呼ばれる。
     fun cancel() {
+        longPressJob?.cancel()
+        longPressJob = null
+        controllerScope.cancel()
+        isLongPressMode = false
+        cancelLongPressAction()
         listener?.onCanceled()
         activeGestureConfig = null
-        longPressJob?.cancel()
-        controllerScope.cancel()
         restoreOriginalButtonText()
         dismissAllPopups(clearDirectionalCache = true)
     }
 
-    // ACTION モードでビューにアタッチする。CROSS_FLICK キー（アイコン付き特殊キー）向け。
     @SuppressLint("ClickableViewAccessibility")
-    fun attach(view: View, map: Map<FlickDirection, FlickAction>) {
+    fun attach(view: View, map: Map<FlickDirection, FlickAction>, previewText: Boolean = false) {
         inputMode = InputMode.ACTION
+        previewsActionText = previewText
         flickActionMap = map.mapValues { (_, action) -> action.withDisplayMetadata() }
         textMap = emptyMap()
         longPressTextMap = emptyMap()
@@ -235,13 +241,14 @@ class CrossFlickInputController(
     private fun handleTouchEvent(view: View, event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                longPressJob?.cancel()
+                isLongPressMode = false
+                cancelLongPressAction()
                 val gestureConfig = gestureConfigSource.snapshot()
                 activeGestureConfig = gestureConfig
                 view.isPressed = true
                 view.drawableHotspotChanged(event.x, event.y)
 
-                isLongPressMode = false
-                isLongPressTriggered = false
                 anchorView = view
                 initialTouchPoint.set(event.rawX, event.rawY)
                 currentDirection = FlickDirection.TAP
@@ -249,17 +256,19 @@ class CrossFlickInputController(
                 notifyPressAction()
 
                 if (inputMode == InputMode.TEXT && gestureConfig.showFlickPopup) {
-                    (anchorView as? Button)?.let { button ->
-                        originalKeyText = button.text
-                        button.text = ""
+                    if (aboveKeyPopup?.isEnabled == true) {
+                        showAboveKeyPopup(FlickDirection.TAP)
+                    } else {
+                        (view as? Button)?.let { button ->
+                            originalKeyText = button.text
+                            button.text = ""
+                        }
+                        showDirectionalPopup(FlickDirection.TAP)
                     }
-                    showDirectionalPopup(FlickDirection.TAP)
                 }
 
-                longPressJob?.cancel()
                 longPressJob = controllerScope.launch {
                     delay(gestureConfig.longPressTimeoutMillis)
-                    isLongPressTriggered = true
                     isLongPressMode = true
                     onLongPressTriggered()
                 }
@@ -300,6 +309,9 @@ class CrossFlickInputController(
                             resolveText(currentDirection, preferLongPress = isLongPressMode),
                             currentDirection != FlickDirection.TAP
                         )
+                    } else if (previewsActionText) {
+                        val text = (resolveAction(currentDirection) as? FlickAction.Input)?.char
+                        listener?.onTextSelectionChanged(text, currentDirection != FlickDirection.TAP)
                     }
                 }
                 updatePopupFingerFeedback(event.rawX, event.rawY)
@@ -312,12 +324,14 @@ class CrossFlickInputController(
                 longPressJob = null
 
                 if (event.action == MotionEvent.ACTION_UP) {
+                    longPressSelection = null
                     commitAction()
                 } else {
-                    notifyLongPressCanceledIfNeeded()
+                    cancelLongPressAction()
                     listener?.onCanceled()
                 }
 
+                isLongPressMode = false
                 restoreOriginalButtonText()
                 dismissAllPopups()
                 anchorView = null
@@ -337,6 +351,7 @@ class CrossFlickInputController(
     // 長押しタイマーが満了したときに呼ばれる。モードに応じてポップアップ表示を切り替える。
     // ACTION: 全方向のアクションポップアップを展開。TEXT: TAP中のみグリッド表示に切り替え（フリック中は方向ポップアップを維持）。
     private fun onLongPressTriggered() {
+        aboveKeyPopup?.dismiss(anchorView)
         when (inputMode) {
             InputMode.ACTION -> {
                 if (currentGestureConfig().showLongPressPopup) {
@@ -345,7 +360,7 @@ class CrossFlickInputController(
                 } else {
                     dismissAllActionPopups()
                 }
-                notifyLongPressActionPreview()
+                updateLongPressAction()
             }
 
             InputMode.TEXT -> {
@@ -390,7 +405,7 @@ class CrossFlickInputController(
                 commitCrossFlickAction(
                     currentDirection = currentDirection,
                     flickActionMap = flickActionMap,
-                    isLongPressTriggered = isLongPressTriggered,
+                    isLongPressTriggered = isLongPressMode,
                     listener = listener
                 )
             }
@@ -410,18 +425,10 @@ class CrossFlickInputController(
         }
     }
 
-    private fun notifyLongPressCanceledIfNeeded() {
-        if (!isLongPressTriggered || inputMode != InputMode.ACTION) {
-            isLongPressTriggered = false
-            isLongPressMode = false
-            return
-        }
-
-        val action = resolveCrossFlickAction(currentDirection, flickActionMap)?.toKeyAction()
-            ?: KeyAction.Cancel
-        listener?.onFlickLongPressCanceled(action, currentDirection)
-        isLongPressTriggered = false
-        isLongPressMode = false
+    private fun cancelLongPressAction() {
+        val (action, direction) = longPressSelection ?: return
+        longPressSelection = null
+        listener?.onFlickLongPressCanceled(action, direction)
     }
 
     // 通常フリック中（長押し前）に方向が変わったときのポップアップ更新。ACTION_MOVE から呼ばれる。
@@ -433,8 +440,17 @@ class CrossFlickInputController(
                 showActionPopup(direction, highlighted = true)
             }
 
-            InputMode.TEXT -> showDirectionalPopup(direction)
+            InputMode.TEXT -> {
+                if (aboveKeyPopup?.isEnabled == true) showAboveKeyPopup(direction)
+                else showDirectionalPopup(direction)
+            }
         }
+    }
+
+    private fun showAboveKeyPopup(direction: FlickDirection) {
+        val anchor = anchorView ?: return
+        val text = resolveText(direction, preferLongPress = false)?.let(inputTextTransform)
+        aboveKeyPopup?.show(anchor, text, directionalPopupStyle)
     }
 
     // 長押しモード中に指が動いたときのハイライト更新。ACTION_MOVE から呼ばれる。
@@ -442,7 +458,7 @@ class CrossFlickInputController(
         when (inputMode) {
             InputMode.ACTION -> {
                 highlightActionPopup(direction)
-                notifyLongPressActionPreview()
+                updateLongPressAction()
             }
 
             InputMode.TEXT -> {
@@ -456,10 +472,14 @@ class CrossFlickInputController(
         }
     }
 
-    // ACTION モードの長押し中、現在ハイライトされている方向のアクションを listener へプレビュー通知する。
-    private fun notifyLongPressActionPreview() {
-        resolveAction(currentDirection)?.let {
-            listener?.onFlickLongPress(it.toKeyAction(), currentDirection)
+    private fun updateLongPressAction() {
+        val action = resolveAction(currentDirection)?.toKeyAction()
+        if (action != longPressSelection?.first) {
+            cancelLongPressAction()
+        }
+        if (action != null && isLongPressMode) {
+            longPressSelection = action to currentDirection
+            listener?.onFlickLongPress(action, currentDirection)
         }
     }
 
@@ -809,6 +829,7 @@ class CrossFlickInputController(
 
     // ACTION・TEXT 両モードのポップアップをすべて閉じる。
     fun dismissAllPopups(clearDirectionalCache: Boolean = false) {
+        aboveKeyPopup?.dismiss(anchorView)
         dismissAllActionPopups()
         dismissDirectionalPopups(clearCache = clearDirectionalCache)
         popupOverlay.dismissAll()

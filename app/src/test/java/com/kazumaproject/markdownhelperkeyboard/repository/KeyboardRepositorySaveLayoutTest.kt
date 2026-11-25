@@ -11,6 +11,7 @@ import com.kazumaproject.custom_keyboard.data.KeyType
 import com.kazumaproject.custom_keyboard.data.KeyboardLayout
 import com.kazumaproject.custom_keyboard.data.KeyboardLayoutUsageMode
 import com.kazumaproject.custom_keyboard.data.SpacerItem
+import com.kazumaproject.custom_keyboard.data.copyWithKeys
 import com.kazumaproject.custom_keyboard.data.deletedKeySlot
 import com.kazumaproject.custom_keyboard.data.isDeletedKeySlot
 import com.kazumaproject.markdownhelperkeyboard.custom_keyboard.data.CircularFlickMapping
@@ -57,6 +58,43 @@ class KeyboardRepositorySaveLayoutTest {
 
     private val dao: KeyboardLayoutDao = mock()
     private val repository = KeyboardRepository(dao)
+
+    @Test
+    fun longPressActionIsSavedAndRestoredOnlyForSpecialKeys(): Unit = runBlocking {
+        val original = fullLayout(1L, "stable-a", 1L, 1, "Saved")
+        whenever(dao.getFullLayoutOneShot(1L)).thenReturn(original)
+        val shortcut = KeyAction.SwitchToNextIme
+        val layout = simpleLayout()
+        val characterKey = layout.keys.single().copy(longPressAction = shortcut)
+        val specialKey = characterKey.copy(
+            column = 1,
+            keyId = "special",
+            isSpecialKey = true,
+            action = KeyAction.Copy
+        )
+        val editedLayout = layout.copyWithKeys(listOf(characterKey, specialKey))
+
+        repository.saveLayout(editedLayout, name = "Saved", id = 1L)
+
+        val keysCaptor = argumentCaptor<List<KeyDefinition>>()
+        verify(dao).updateFullKeyboardLayoutKeepingIdentity(
+            any(), keysCaptor.capture(), any(), any(), any(), any(), any(), any()
+        )
+        val saved = keysCaptor.firstValue
+        assertNull(saved.single { !it.isSpecialKey }.longPressAction)
+        assertEquals("SwitchToNextIme", saved.single { it.isSpecialKey }.longPressAction)
+
+        val storedKeys = saved.map { key ->
+            KeyWithFlicks(
+                key.copy(longPressAction = "SwitchToNextIme"),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            )
+        }
+        whenever(dao.getFullLayoutById(1L)).thenReturn(flowOf(original.copy(keysWithFlicks = storedKeys)))
+        val restored = repository.getFullLayout(1L).first().keys
+        assertNull(restored.single { !it.isSpecialKey }.longPressAction)
+        assertEquals(shortcut, restored.single { it.isSpecialKey }.longPressAction)
+    }
 
     // ---------------------------------------------------------
     // A. 既存レイアウト保存で stableId が変わらない

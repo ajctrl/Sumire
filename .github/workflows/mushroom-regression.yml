@@ -60,19 +60,23 @@ jobs:
           }
           GRADLE
       - name: Build Lite APKs and run focused unit tests
-        run: >-
-          ./gradlew -I "$RUNNER_TEMP/mushroom.init.gradle"
-          -x :app:generateMozcSegmenterData
-          :app:testLiteStandardDebugUnitTest
-          --tests '*MushroomTargetTest'
-          --tests '*SuggestionAdapterVectorTintTest'
-          --tests '*ShortcutToolbarPresentationPolicyTest'
-          --tests '*SettingsBackupRepositoryTest'
-          :app:assembleLiteStandardDebug
-          :app:assembleLiteStandardDebugAndroidTest
-          --max-workers=2
-          -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8'
-          -Pkotlin.compiler.execution.strategy=in-process
+        run: |
+          runner=(./gradlew)
+          if [[ -f .github/scripts/gradle-with-maven-mirror.py ]]; then
+            runner=(python3 .github/scripts/gradle-with-maven-mirror.py)
+          fi
+          "${runner[@]}" -I "$RUNNER_TEMP/mushroom.init.gradle" \
+            -x :app:generateMozcSegmenterData \
+            :app:testLiteStandardDebugUnitTest \
+            --tests '*MushroomTargetTest' \
+            --tests '*SuggestionAdapterVectorTintTest' \
+            --tests '*ShortcutToolbarPresentationPolicyTest' \
+            --tests '*SettingsBackupRepositoryTest' \
+            :app:assembleLiteStandardDebug \
+            :app:assembleLiteStandardDebugAndroidTest \
+            --max-workers=2 \
+            -Dorg.gradle.jvmargs='-Xmx2g -Dfile.encoding=UTF-8' \
+            -Pkotlin.compiler.execution.strategy=in-process
       - name: Save successful compilation before device tests
         if: steps.gradle_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5

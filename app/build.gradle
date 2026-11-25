@@ -69,8 +69,8 @@ android {
         applicationId "com.example.sumire"
         minSdk 24
         targetSdk 37
-        versionCode 874
-        versionName "1.7.160.1"
+        versionCode 882
+        versionName "1.7.163"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "SUMIRE_SYNC_PACKAGE_ID", "\"${sumireSyncPackageId}\""
     }
@@ -169,6 +169,9 @@ android {
             includeAndroidResources = true
             all {
                 maxHeapSize = '2g'
+                if (providers.environmentVariable('GITHUB_ACTIONS').orNull == 'true') {
+                    systemProperty 'robolectric.dependency.repo.url', 'https://maven-central.storage-download.googleapis.com/maven2'
+                }
                 inputs.file(rootProject.file("tools/classified-dictionaries/distribution-manifest.json"))
                 def fixtureRoot = providers.gradleProperty('classifiedFixtureRoot').orNull
                 if (fixtureRoot != null) {

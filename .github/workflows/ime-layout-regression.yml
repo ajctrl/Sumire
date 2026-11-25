@@ -46,7 +46,7 @@ jobs:
 
       - name: Build Lite APKs and run unit tests
         run: >-
-          ./gradlew
+          python3 .github/scripts/gradle-with-maven-mirror.py
           :app:testLiteStandardDebugUnitTest
           :app:assembleLiteStandardDebug
           :app:assembleLiteStandardDebugAndroidTest
