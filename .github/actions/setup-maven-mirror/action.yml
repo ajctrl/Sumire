@@ -1,0 +1,27 @@
+name: Set up Maven Central mirror
+description: Route Gradle and Robolectric Maven Central requests through a retrying loopback proxy
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        # A release or benchmark may check out a different revision after this step.
+        init_dir="${GRADLE_USER_HOME:-$HOME/.gradle}/init.d"
+        mkdir -p "$init_dir"
+        cp "$GITHUB_ACTION_PATH/init.gradle" "$init_dir/sumire-maven-mirror.gradle"
+        log="$RUNNER_TEMP/sumire-maven-mirror.log"
+        # Keep a stable repository URL across isolated CI runners for Gradle's cache.
+        port=18766
+        python3 -u "$GITHUB_ACTION_PATH/proxy.py" "$port" >"$log" 2>&1 </dev/null &
+        pid=$!
+        proxy="http://127.0.0.1:$port"
+        for attempt in {1..50}; do
+          if ! kill -0 "$pid" 2>/dev/null; then cat "$log"; exit 1; fi
+          if curl -fsS "$proxy/health" >/dev/null 2>&1; then break; fi
+          sleep 0.1
+        done
+        curl -fsS "$proxy/health"
+        echo "SUMIRE_MAVEN_PROXY=$proxy" >> "$GITHUB_ENV"
+        # Let a single HTTP request wait through the five-minute backoff window.
+        echo "GRADLE_OPTS=${GRADLE_OPTS:-} -Dorg.gradle.internal.http.socketTimeout=420000" >> "$GITHUB_ENV"

@@ -20,6 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Check out Maven mirror setup from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/actions/setup-maven-mirror
+          persist-credentials: false
+      - uses: ./.github/actions/setup-maven-mirror
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -61,11 +68,7 @@ jobs:
           GRADLE
       - name: Build Lite APKs and run focused unit tests
         run: |
-          runner=(./gradlew)
-          if [[ -f .github/scripts/gradle-with-maven-mirror.py ]]; then
-            runner=(python3 .github/scripts/gradle-with-maven-mirror.py)
-          fi
-          "${runner[@]}" -I "$RUNNER_TEMP/mushroom.init.gradle" \
+          ./gradlew -I "$RUNNER_TEMP/mushroom.init.gradle" \
             -x :app:generateMozcSegmenterData \
             :app:testLiteStandardDebugUnitTest \
             --tests '*MushroomTargetTest' \

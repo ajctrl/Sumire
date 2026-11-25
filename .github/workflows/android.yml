@@ -64,6 +64,13 @@ jobs:
     env:
       ZENZ_MODEL_CACHE_DIR: ${{ github.workspace }}/.zenz-model-cache
     steps:
+      - name: Check out Maven mirror setup from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/actions/setup-maven-mirror
+          persist-credentials: false
+      - uses: ./.github/actions/setup-maven-mirror
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.sha }}

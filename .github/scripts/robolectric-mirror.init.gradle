@@ -1,9 +1,0 @@
-// Apply after the build's own test configuration, including in a baseline worktree.
-gradle.projectsEvaluated {
-    gradle.rootProject.allprojects { project ->
-        def mirrorUrl = project.providers.gradleProperty('robolectricMirrorUrl').get()
-        project.tasks.withType(Test).configureEach {
-            systemProperty 'robolectric.dependency.repo.url', mirrorUrl
-        }
-    }
-}
