@@ -71,7 +71,7 @@ jobs:
 
       - name: Build APKs and run unit tests
         run: >-
-          ./gradlew
+          python3 .github/scripts/gradle-with-maven-mirror.py
           :app:testFullStandardDebugUnitTest
           :gojuon_keyboard:testDebugUnitTest
           :app:assembleFullStandardDebug

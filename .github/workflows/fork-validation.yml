@@ -52,7 +52,13 @@ jobs:
         id: build
         run: ./gradlew :app:assemble${{ matrix.edition }}StandardDebug --stacktrace --no-daemon --max-workers=2
       - name: Run app unit tests
-        run: ./gradlew :app:test${{ matrix.edition }}StandardDebugUnitTest --stacktrace --no-daemon --max-workers=2
+        run: |
+          # A release retry can check out a tag that predates the mirror wrapper.
+          runner=(./gradlew)
+          if [[ -f .github/scripts/gradle-with-maven-mirror.py ]]; then
+            runner=(python3 .github/scripts/gradle-with-maven-mirror.py)
+          fi
+          "${runner[@]}" :app:test${{ matrix.edition }}StandardDebugUnitTest --stacktrace --no-daemon --max-workers=2
       - name: Run Android Lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: ./gradlew :app:lint${{ matrix.edition }}StandardDebug --stacktrace --no-daemon --max-workers=2
