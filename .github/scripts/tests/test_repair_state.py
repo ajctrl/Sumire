@@ -47,6 +47,36 @@ class StateTests(unittest.TestCase):
             second.reserve(2000, 10000)
         self.assertEqual(sum(second.data["pending"].values()), 9000)
 
+    def test_cache_details_are_reported_without_discounting_the_daily_limit(self):
+        saved = dict(snapshot(), date=state.today())
+        Path(os.environ["OPENAI_BUDGET_FILE"]).write_text(json.dumps(saved))
+        current = state.RepairState()
+        usage = {"total_tokens": 800, "input_tokens": 700,
+                 "input_tokens_details": {"cached_tokens": 600}}
+        current.settle(current.reserve(900, 1000), {"usage": usage})
+        current.save()
+        restored = state.RepairState()
+        self.assertEqual(restored.data["cached_input_tokens"], 600)
+        self.assertEqual(restored.data["tokens_without_cache_details"], 100)
+        self.assertEqual(restored.remaining(1000), 100)
+        with self.assertRaises(state.BudgetPaused):
+            restored.reserve(101, 1000)
+        with patch.object(state, "today", return_value="2100-01-01"):
+            self.assertEqual(restored.remaining(1000), 1000)
+        self.assertEqual(restored.data["cached_input_tokens"], 0)
+        self.assertEqual(restored.data["tokens_without_cache_details"], 0)
+
+    def test_unknown_cache_usage_is_distinct_from_a_reported_zero(self):
+        current = state.RepairState()
+        for usage in [{}, {"total_tokens": 50}, {"total_tokens": 50, "input_tokens": 30,
+                                                "input_tokens_details": {"cached_tokens": 40}}]:
+            current.settle(current.reserve(100, 1000), {"usage": usage})
+        current.settle(current.reserve(100, 1000), {"usage": {
+            "total_tokens": 90, "input_tokens": 80, "input_tokens_details": {"cached_tokens": 0}}})
+        self.assertEqual(current.data["used_tokens"], 290)
+        self.assertEqual(current.data["cached_input_tokens"], 0)
+        self.assertEqual(current.data["tokens_without_cache_details"], 200)
+
     def test_restore_filters_source_and_uses_latest_revision_for_timestamp_ties(self):
         def artifact(identifier, run, slot, **changes):
             result = {"id": identifier, "name": f"sumire-repair-state-v1-{run}-1-{slot}",
@@ -103,7 +133,8 @@ class StateTests(unittest.TestCase):
                 download.assert_not_called()
 
     def test_invalid_checkpoint_does_not_silently_reset_usage(self):
-        for bad in ([], {}, dict(snapshot(), used_tokens=-1), dict(snapshot(), pending={"id": -1})):
+        for bad in ([], {}, dict(snapshot(), used_tokens=-1), dict(snapshot(), pending={"id": -1}),
+                    dict(snapshot(), cached_input_tokens=80, tokens_without_cache_details=30)):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 state.validate(bad)
 
