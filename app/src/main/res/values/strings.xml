@@ -823,10 +823,17 @@
     <string name="editor_cycle_target">Cycle target</string>
     <string name="normal_key">Normal Key</string>
     <string name="special_key">Special Key</string>
+    <string name="mixed_key">Mixed Key</string>
+    <string name="mixed_flick_unassigned">Unassigned</string>
+    <string name="mixed_flick_text">Text Input</string>
+    <string name="mixed_flick_action">Special Action</string>
     <string name="key_label">Label for Key Display</string>
     <string name="key_action">Action for Key</string>
     <string name="double_tap_action">Double-tap action</string>
     <string name="double_tap_disabled">None</string>
+    <string name="custom_key_long_press_action">Long-press action</string>
+    <string name="custom_key_long_press_disabled">None</string>
+    <string name="custom_key_long_press_priority">The assigned action takes priority over this key’s other long-press behavior.</string>
     <string name="special_key_category_input">Input and conversion</string>
     <string name="special_key_category_delete_cursor">Delete and cursor</string>
     <string name="special_key_category_text_mode">Text and input mode</string>
@@ -1448,6 +1455,9 @@
     <string name="donuts_flick">Donuts Flick</string>
     <string name="qwerty_button_size_preference_title">Key size</string>
     <string name="qwerty_button_size_preference_summary">Change the size of keys, text, and special key icons.</string>
+    <string name="flick_popup_position_title">Flick popup position</string>
+    <string name="flick_popup_position_around_key">Around the key</string>
+    <string name="flick_popup_position_above_key">Above the key</string>
     <string name="show_flick_key_popup_title">Show flick popup</string>
     <string name="show_long_press_key_popup_title">Show long-press popup</string>
     <string name="tenkey_popup_view_style_preference_title">Tap/flick PopupView size</string>
