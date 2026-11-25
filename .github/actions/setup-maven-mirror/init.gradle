@@ -1,0 +1,33 @@
+// Register before the settings plugins block and each project's buildscript classpath resolve.
+def proxy = System.getenv('SUMIRE_MAVEN_PROXY')
+if (!proxy) return
+
+def useMirror = { repositories ->
+    repositories.withType(MavenArtifactRepository).all { repo ->
+        def url = repo.url
+        if (url?.host in ['repo.maven.apache.org', 'repo1.maven.org'] && url.path.replaceAll('/+$', '') == '/maven2') {
+            repo.url = uri(proxy + '/central/')
+            repo.allowInsecureProtocol = true
+        } else if (url?.host == 'plugins.gradle.org' && url.path.replaceAll('/+$', '') == '/m2') {
+            // The portal can redirect an artifact request to Maven Central.
+            repo.url = uri(proxy + '/plugins/')
+            repo.allowInsecureProtocol = true
+        }
+    }
+}
+
+gradle.beforeSettings { settings ->
+    useMirror(settings.pluginManagement.repositories)
+    useMirror(settings.dependencyResolutionManagement.repositories)
+}
+gradle.beforeProject { project ->
+    useMirror(project.buildscript.repositories)
+    useMirror(project.repositories)
+}
+gradle.projectsEvaluated {
+    gradle.rootProject.allprojects { project ->
+        project.tasks.withType(Test).configureEach {
+            systemProperty 'robolectric.dependency.repo.url', proxy + '/central/'
+        }
+    }
+}

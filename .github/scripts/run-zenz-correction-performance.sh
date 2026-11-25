@@ -71,10 +71,7 @@ build() {
 }
 build "$baseline_root" before
 build "$head_root" after
-run_unit_tests() {
-    python3 "$head_root/.github/scripts/gradle-with-maven-mirror.py" "$@"
-}
-(cd "$head_root" && run_unit_tests :app:testFullStandardDebugUnitTest \
+(cd "$head_root" && ./gradlew :app:testFullStandardDebugUnitTest \
     --tests '*Zenz*Test' --tests '*KanaKanjiConversionSessionParityTest' \
     --tests '*CandidateCorrectionPolicyTest' \
     --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g \
@@ -82,7 +79,7 @@ run_unit_tests() {
     > "$artifact_dir/logs/related-unit-tests.txt" 2>&1
 
 # Verify the edition without zenz as well, using the same scoped unit-test selection.
-(cd "$head_root" && run_unit_tests :app:testLiteStandardDebugUnitTest \
+(cd "$head_root" && ./gradlew :app:testLiteStandardDebugUnitTest \
     --tests '*Zenz*Test' --tests '*KanaKanjiConversionSessionParityTest' \
     --tests '*CandidateCorrectionPolicyTest' \
     :app:assembleLiteStandardDebug \
@@ -97,7 +94,7 @@ collect_unit_results related
 for label in before after; do
     root="$head_root"; if [[ "$label" == before ]]; then root="$baseline_root"; fi
     audit_status=0
-    (cd "$root" && run_unit_tests :app:testFullStandardDebugUnitTest \
+    (cd "$root" && ./gradlew :app:testFullStandardDebugUnitTest \
         --tests '*CustomDirectInputTransitionTest' --tests '*IMEServiceCupertinoCandidateAppearanceTest' \
         --tests '*IMEServiceFloatingCursorRegressionTest' --tests '*QwertyEnglishSpaceInputTest' \
         --tests '*SplitKeyboardServiceSyncTest' --tests '*DictionaryBrowserTest' \
