@@ -18,6 +18,7 @@ jobs:
         with:
           submodules: recursive
 
+      - uses: ./.github/actions/setup-maven-mirror
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -46,7 +47,7 @@ jobs:
 
       - name: Build Lite APKs and run unit tests
         run: >-
-          python3 .github/scripts/gradle-with-maven-mirror.py
+          ./gradlew
           :app:testLiteStandardDebugUnitTest
           :app:assembleLiteStandardDebug
           :app:assembleLiteStandardDebugAndroidTest
@@ -117,6 +118,7 @@ jobs:
         with:
           submodules: recursive
 
+      - uses: ./.github/actions/setup-maven-mirror
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:

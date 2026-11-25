@@ -22,6 +22,13 @@ jobs:
       matrix:
         edition: [Lite, Full]
     steps:
+      - name: Check out Maven mirror setup from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/actions/setup-maven-mirror
+          persist-credentials: false
+      - uses: ./.github/actions/setup-maven-mirror
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -52,13 +59,7 @@ jobs:
         id: build
         run: ./gradlew :app:assemble${{ matrix.edition }}StandardDebug --stacktrace --no-daemon --max-workers=2
       - name: Run app unit tests
-        run: |
-          # A release retry can check out a tag that predates the mirror wrapper.
-          runner=(./gradlew)
-          if [[ -f .github/scripts/gradle-with-maven-mirror.py ]]; then
-            runner=(python3 .github/scripts/gradle-with-maven-mirror.py)
-          fi
-          "${runner[@]}" :app:test${{ matrix.edition }}StandardDebugUnitTest --stacktrace --no-daemon --max-workers=2
+        run: ./gradlew :app:test${{ matrix.edition }}StandardDebugUnitTest --stacktrace --no-daemon --max-workers=2
       - name: Run Android Lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: ./gradlew :app:lint${{ matrix.edition }}StandardDebug --stacktrace --no-daemon --max-workers=2

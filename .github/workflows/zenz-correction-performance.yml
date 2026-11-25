@@ -51,6 +51,13 @@ jobs:
       ZENZ_PERF_PHASE: build
       ZENZ_PERF_BASELINE_REF: ${{ inputs.baseline_ref || github.event.pull_request.base.sha || 'dev' }}
     steps:
+      - name: Check out Maven mirror setup from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/actions/setup-maven-mirror
+          persist-credentials: false
+      - uses: ./.github/actions/setup-maven-mirror
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
