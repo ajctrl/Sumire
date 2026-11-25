@@ -34,6 +34,11 @@ def validate(state):
             or any(type(n) is not int or n < 0 for n in state["pending"].values())
             or not isinstance(state.get("repairs"), dict)):
         raise ValueError("Invalid repair checkpoint")
+    cached = state.get("cached_input_tokens", 0)
+    unknown = state.get("tokens_without_cache_details", state["used_tokens"])
+    if (type(cached) is not int or type(unknown) is not int
+            or min(cached, unknown) < 0 or cached + unknown > state["used_tokens"]):
+        raise ValueError("Invalid cache usage in repair checkpoint")
     return state
 
 
@@ -96,6 +101,9 @@ class RepairState:
             restored = restore_remote() if self.remote else None
             self.data = restored or {"version": 1, "revision": 0, "date": today(),
                                      "used_tokens": 0, "pending": {}, "repairs": {}}
+        # Old checkpoints carry gross usage only.
+        self.data.setdefault("cached_input_tokens", 0)
+        self.data.setdefault("tokens_without_cache_details", self.data["used_tokens"])
 
     def save(self):
         self.data["revision"] += 1
@@ -109,7 +117,8 @@ class RepairState:
 
     def remaining(self, limit):
         if self.data["date"] != today():
-            self.data.update(date=today(), used_tokens=0, pending={})
+            self.data.update(date=today(), used_tokens=0, cached_input_tokens=0,
+                             tokens_without_cache_details=0, pending={})
         spent = self.data["used_tokens"] + sum(self.data["pending"].values())
         return max(0, limit - spent)
 
@@ -131,10 +140,24 @@ class RepairState:
 
     def settle(self, reservation, response):
         reserved = self.data["pending"].pop(reservation)
-        actual = (response.get("usage") or {}).get("total_tokens")
+        usage = response.get("usage") or {}
+        actual = usage.get("total_tokens")
+        input_tokens = usage.get("input_tokens")
+        details = usage.get("input_tokens_details")
+        cached = details.get("cached_tokens") if isinstance(details, dict) else None
         if type(actual) is not int or actual < 0:
             actual = reserved  # An unknown charge is never treated as zero.
+            cached = None
+        if (type(cached) is int and type(input_tokens) is int
+                and 0 <= cached <= input_tokens <= actual):
+            self.data["cached_input_tokens"] += cached
+        else:
+            cached = None
+            self.data["tokens_without_cache_details"] += actual
         self.data["used_tokens"] += actual
+        print(f"Accounted tokens: {actual}; cached input: {cached if cached is not None else 'unknown'}. "
+              f"UTC day: {self.data['used_tokens']} total, {self.data['cached_input_tokens']} confirmed cached input, "
+              f"{self.data['tokens_without_cache_details']} tokens without cache details.")
 
     def entry(self, task, path, content):
         key = hashlib.sha256(json.dumps([task, path, content], ensure_ascii=False).encode()).hexdigest()
